@@ -51,6 +51,9 @@ const (
 	// Resources Methods
 	MethodResourcesList                    = "resources/list"
 	MethodResourcesRead                    = "resources/read"
+	MethodResourcesCreate                  = "resources/create"
+	MethodResourcesUpdate                  = "resources/update"
+	MethodResourcesDelete                  = "resources/delete"
 	MethodNotificationResourcesListChanged = "notifications/resources/list_changed"
 	MethodNotificationResourceChanged      = "notifications/resources/changed"
 	MethodResourcesTemplatesList           = "resources/templates/list"
@@ -1428,4 +1431,39 @@ type CloseSessionResponse struct {
 // ErrorResponse represents an error response to a request
 type ErrorResponse struct {
 	Error *McpError `json:"error"`
+}
+
+// CreateResourceRequest represents a request to create a new resource
+type CreateResourceRequest struct {
+	BaseRequest
+	Resource Resource `json:"resource"`
+	Contents []byte   `json:"contents"`
+}
+
+// CreateResourceResult represents the result of creating a resource
+type CreateResourceResult struct {
+	Resource Resource `json:"resource"`
+}
+
+// UpdateResourceRequest represents a request to update an existing resource
+type UpdateResourceRequest struct {
+	BaseRequest
+	Resource Resource `json:"resource"`
+	Contents []byte   `json:"contents"`
+}
+
+// UpdateResourceResult represents the result of updating a resource
+type UpdateResourceResult struct {
+	Resource Resource `json:"resource"`
+}
+
+// DeleteResourceRequest represents a request to delete a resource
+type DeleteResourceRequest struct {
+	BaseRequest
+	URI string `json:"uri"`
+}
+
+// DeleteResourceResult represents the result of deleting a resource
+type DeleteResourceResult struct {
+	Success bool `json:"success"`
 }

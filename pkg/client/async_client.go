@@ -578,6 +578,136 @@ func (c *asyncClientImpl) ReadResourceAsync(ctx context.Context, uri string) (ch
 	return resultCh, errCh
 }
 
+// CreateResource creates a new resource on the server.
+func (c *asyncClientImpl) CreateResource(resource spec.Resource, contents []byte) error {
+	ctx, cancel := context.WithTimeout(context.Background(), c.requestTimeout)
+	defer cancel()
+
+	errCh := c.CreateResourceAsync(ctx, resource, contents)
+
+	select {
+	case err := <-errCh:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// CreateResourceAsync creates a new resource on the server asynchronously.
+func (c *asyncClientImpl) CreateResourceAsync(ctx context.Context, resource spec.Resource, contents []byte) chan error {
+	errCh := make(chan error, 1)
+
+	if !c.initialized {
+		errCh <- errors.New("client not initialized")
+		close(errCh)
+		return errCh
+	}
+
+	util.AssertNotNil(resource, "Resource must not be nil")
+	util.AssertNotEmpty(resource.URI, "Resource URI must not be empty")
+
+	go func() {
+		defer close(errCh)
+
+		// Create request payload
+		requestParams := &spec.CreateResourceRequest{
+			Resource: resource,
+			Contents: contents,
+		}
+
+		var result spec.CreateResourceResult
+		errCh <- c.session.SendRequest(ctx, spec.MethodResourcesCreate, requestParams, &result)
+	}()
+
+	return errCh
+}
+
+// UpdateResource updates an existing resource on the server.
+func (c *asyncClientImpl) UpdateResource(resource spec.Resource, contents []byte) error {
+	ctx, cancel := context.WithTimeout(context.Background(), c.requestTimeout)
+	defer cancel()
+
+	errCh := c.UpdateResourceAsync(ctx, resource, contents)
+
+	select {
+	case err := <-errCh:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// UpdateResourceAsync updates an existing resource on the server asynchronously.
+func (c *asyncClientImpl) UpdateResourceAsync(ctx context.Context, resource spec.Resource, contents []byte) chan error {
+	errCh := make(chan error, 1)
+
+	if !c.initialized {
+		errCh <- errors.New("client not initialized")
+		close(errCh)
+		return errCh
+	}
+
+	util.AssertNotNil(resource, "Resource must not be nil")
+	util.AssertNotEmpty(resource.URI, "Resource URI must not be empty")
+
+	go func() {
+		defer close(errCh)
+
+		// Create request payload
+		requestParams := &spec.UpdateResourceRequest{
+			Resource: resource,
+			Contents: contents,
+		}
+
+		var result spec.UpdateResourceResult
+		errCh <- c.session.SendRequest(ctx, spec.MethodResourcesUpdate, requestParams, &result)
+	}()
+
+	return errCh
+}
+
+// DeleteResource deletes a resource from the server.
+func (c *asyncClientImpl) DeleteResource(uri string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), c.requestTimeout)
+	defer cancel()
+
+	errCh := c.DeleteResourceAsync(ctx, uri)
+
+	select {
+	case err := <-errCh:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// DeleteResourceAsync deletes a resource from the server asynchronously.
+func (c *asyncClientImpl) DeleteResourceAsync(ctx context.Context, uri string) chan error {
+	errCh := make(chan error, 1)
+
+	if !c.initialized {
+		errCh <- errors.New("client not initialized")
+		close(errCh)
+		return errCh
+	}
+
+	util.AssertNotEmpty(uri, "Resource URI must not be empty")
+
+	go func() {
+		defer close(errCh)
+
+		// Create request payload
+		requestParams := &spec.DeleteResourceRequest{
+			URI: uri,
+		}
+
+		var result spec.DeleteResourceResult
+		errCh <- c.session.SendRequest(ctx, spec.MethodResourcesDelete, requestParams, &result)
+	}()
+
+	return errCh
+}
+
 // GetResourceTemplates returns the list of resource templates provided by the server.
 func (c *asyncClientImpl) GetResourceTemplates() ([]spec.ResourceTemplate, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), c.requestTimeout)

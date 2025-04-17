@@ -480,6 +480,70 @@ func (c *syncClientImpl) ReadResource(uri string) ([]spec.ResourceContents, erro
 	return result.Contents, nil
 }
 
+// CreateResource creates a new resource on the server.
+func (c *syncClientImpl) CreateResource(resource spec.Resource, contents []byte) error {
+	if !c.initialized {
+		return errors.New("client not initialized")
+	}
+
+	util.AssertNotNil(resource, "Resource must not be nil")
+	util.AssertNotEmpty(resource.URI, "Resource URI must not be empty")
+
+	ctx, cancel := context.WithTimeout(context.Background(), c.requestTimeout)
+	defer cancel()
+
+	// Create request payload
+	requestParams := &spec.CreateResourceRequest{
+		Resource: resource,
+		Contents: contents,
+	}
+
+	var result spec.CreateResourceResult
+	return c.session.SendRequest(ctx, spec.MethodResourcesCreate, requestParams, &result)
+}
+
+// UpdateResource updates an existing resource on the server.
+func (c *syncClientImpl) UpdateResource(resource spec.Resource, contents []byte) error {
+	if !c.initialized {
+		return errors.New("client not initialized")
+	}
+
+	util.AssertNotNil(resource, "Resource must not be nil")
+	util.AssertNotEmpty(resource.URI, "Resource URI must not be empty")
+
+	ctx, cancel := context.WithTimeout(context.Background(), c.requestTimeout)
+	defer cancel()
+
+	// Create request payload
+	requestParams := &spec.UpdateResourceRequest{
+		Resource: resource,
+		Contents: contents,
+	}
+
+	var result spec.UpdateResourceResult
+	return c.session.SendRequest(ctx, spec.MethodResourcesUpdate, requestParams, &result)
+}
+
+// DeleteResource deletes a resource from the server.
+func (c *syncClientImpl) DeleteResource(uri string) error {
+	if !c.initialized {
+		return errors.New("client not initialized")
+	}
+
+	util.AssertNotEmpty(uri, "Resource URI must not be empty")
+
+	ctx, cancel := context.WithTimeout(context.Background(), c.requestTimeout)
+	defer cancel()
+
+	// Create request payload
+	requestParams := &spec.DeleteResourceRequest{
+		URI: uri,
+	}
+
+	var result spec.DeleteResourceResult
+	return c.session.SendRequest(ctx, spec.MethodResourcesDelete, requestParams, &result)
+}
+
 // GetResourceTemplates returns the list of resource templates provided by the server.
 func (c *syncClientImpl) GetResourceTemplates() ([]spec.ResourceTemplate, error) {
 	if !c.initialized {

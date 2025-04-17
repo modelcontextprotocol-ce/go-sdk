@@ -56,6 +56,15 @@ type McpClient interface {
 	// ReadResource reads a resource from the server.
 	ReadResource(uri string) ([]spec.ResourceContents, error)
 
+	// CreateResource creates a new resource on the server.
+	CreateResource(resource spec.Resource, contents []byte) error
+
+	// UpdateResource updates an existing resource on the server.
+	UpdateResource(resource spec.Resource, contents []byte) error
+
+	// DeleteResource deletes a resource from the server.
+	DeleteResource(uri string) error
+
 	// GetResourceTemplates returns the list of resource templates provided by the server.
 	GetResourceTemplates() ([]spec.ResourceTemplate, error)
 
@@ -110,6 +119,15 @@ type McpAsyncClient interface {
 
 	// ReadResourceAsync reads a resource from the server asynchronously.
 	ReadResourceAsync(ctx context.Context, uri string) (chan []spec.ResourceContents, chan error)
+
+	// CreateResourceAsync creates a new resource on the server asynchronously.
+	CreateResourceAsync(ctx context.Context, resource spec.Resource, contents []byte) chan error
+
+	// UpdateResourceAsync updates an existing resource on the server asynchronously.
+	UpdateResourceAsync(ctx context.Context, resource spec.Resource, contents []byte) chan error
+
+	// DeleteResourceAsync deletes a resource from the server asynchronously.
+	DeleteResourceAsync(ctx context.Context, uri string) chan error
 
 	// GetResourceTemplatesAsync returns the list of resource templates provided by the server asynchronously.
 	GetResourceTemplatesAsync(ctx context.Context) (chan []spec.ResourceTemplate, chan error)
