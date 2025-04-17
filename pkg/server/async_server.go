@@ -570,7 +570,7 @@ func (s *asyncServerImpl) processMessage(msg interface{}, session spec.McpClient
 		errMsg := fmt.Sprintf("unsupported message type: %T", msg)
 		errorResponse := &spec.ErrorResponse{
 			Error: &spec.McpError{
-				Code:    spec.ErrorCodeInvalidRequest,
+				Code:    spec.ErrCodeInvalidRequest,
 				Message: errMsg,
 			},
 		}
@@ -583,7 +583,7 @@ func (s *asyncServerImpl) handleContentRequest(request *spec.ContentRequest, ses
 	if s.createMessageHandler == nil {
 		errorResponse := &spec.ErrorResponse{
 			Error: &spec.McpError{
-				Code:    spec.ErrorCodeServerError,
+				Code:    spec.ErrCodeServerError,
 				Message: "no message handler configured",
 			},
 		}
@@ -650,7 +650,7 @@ func (s *asyncServerImpl) handleToolExecutionRequest(request *spec.ToolExecution
 	if !ok {
 		errorResponse := &spec.ErrorResponse{
 			Error: &spec.McpError{
-				Code:    spec.ErrorCodeInvalidRequest,
+				Code:    spec.ErrCodeInvalidRequest,
 				Message: fmt.Sprintf("no handler for tool: %s", request.ToolName),
 			},
 		}
@@ -721,7 +721,7 @@ func (s *asyncServerImpl) handleResourceRequest(request *spec.ResourceRequest, s
 	if s.resourceHandler == nil {
 		errorResponse := &spec.ErrorResponse{
 			Error: &spec.McpError{
-				Code:    spec.ErrorCodeServerError,
+				Code:    spec.ErrCodeServerError,
 				Message: "no resource handler configured",
 			},
 		}
@@ -809,7 +809,7 @@ func (s *asyncServerImpl) handlePromptRequest(request *spec.PromptRequest, sessi
 	if s.promptHandler == nil {
 		errorResponse := &spec.ErrorResponse{
 			Error: &spec.McpError{
-				Code:    spec.ErrorCodeServerError,
+				Code:    spec.ErrCodeServerError,
 				Message: "no prompt handler configured",
 			},
 		}
@@ -900,7 +900,7 @@ func (s *defaultResponseSender) SendError(err error) error {
 	mcpErr, ok := err.(*spec.McpError)
 	if !ok {
 		mcpErr = &spec.McpError{
-			Code:    spec.ErrorCodeServerError,
+			Code:    spec.ErrCodeServerError,
 			Message: err.Error(),
 		}
 	}
@@ -940,7 +940,7 @@ func (p *defaultContentPublisher) ErrorContent(err error) error {
 	mcpErr, ok := err.(*spec.McpError)
 	if !ok {
 		mcpErr = &spec.McpError{
-			Code:    spec.ErrorCodeServerError,
+			Code:    spec.ErrCodeServerError,
 			Message: err.Error(),
 		}
 	}

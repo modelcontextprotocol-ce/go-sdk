@@ -63,6 +63,10 @@ type McpClient interface {
 	// CreateMessage sends a create message request to the server.
 	CreateMessage(request *spec.CreateMessageRequest) (*spec.CreateMessageResult, error)
 
+	// CreateMessageStream sends a create message request to the server and streams the responses.
+	// The returned channel will receive partial results as they become available.
+	CreateMessageStream(ctx context.Context, request *spec.CreateMessageRequest) (<-chan *spec.CreateMessageResult, <-chan error)
+
 	// SetLoggingLevel sets the minimum level for logs from the server.
 	SetLoggingLevel(level spec.LogLevel) error
 
@@ -108,6 +112,10 @@ type McpAsyncClient interface {
 
 	// CreateMessageAsync sends a create message request to the server asynchronously.
 	CreateMessageAsync(ctx context.Context, request *spec.CreateMessageRequest) (chan *spec.CreateMessageResult, chan error)
+
+	// CreateMessageStreamAsync sends a create message request to the server and streams the responses asynchronously.
+	// The returned channels will receive partial results and errors as they become available.
+	CreateMessageStreamAsync(ctx context.Context, request *spec.CreateMessageRequest) (chan *spec.CreateMessageResult, chan error)
 
 	// SetLoggingLevelAsync sets the minimum level for logs from the server asynchronously.
 	SetLoggingLevelAsync(ctx context.Context, level spec.LogLevel) chan error

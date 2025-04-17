@@ -34,6 +34,7 @@ type clientSession struct {
 	nextID               int64
 	handlers             map[string]pendingRequest
 	notificationHandlers map[string]spec.NotificationHandler
+	streamingHandlers    map[string]func(*spec.CreateMessageResult)
 	clientInfo           spec.ClientInfo
 	mu                   sync.RWMutex
 	closed               bool
@@ -72,6 +73,7 @@ func NewClientSession(transport spec.McpClientTransport, defaultTimeout time.Dur
 		nextID:               1,
 		handlers:             make(map[string]pendingRequest),
 		notificationHandlers: make(map[string]spec.NotificationHandler),
+		streamingHandlers:    make(map[string]func(*spec.CreateMessageResult)),
 		clientInfo:           clientInfo,
 		defaultTimeout:       defaultTimeout,
 		subscriptions:        make(map[string]bool),
@@ -105,51 +107,19 @@ func (s *clientSession) IsClosed() bool {
 
 // SendRequest sends a request to the counterparty and expects a response
 func (s *clientSession) SendRequest(ctx context.Context, method string, params interface{}, resultPtr interface{}) error {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-
-	// Set timeout if not already set
-	_, hasTimeout := ctx.Deadline()
-	if !hasTimeout {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, s.defaultTimeout)
-		defer cancel()
-	}
-
-	// Create channels for async handling
 	resultCh, errCh := s.SendRequestAsync(ctx, method, params, reflect.TypeOf(resultPtr).Elem())
 
-	// Wait for result or error
+	// Wait for response
 	select {
 	case result := <-resultCh:
-		// Copy the result to the provided pointer
-		resultValue := reflect.ValueOf(resultPtr).Elem()
-		resultValue.Set(reflect.ValueOf(result))
+		// Copy the result to the pointer
+		reflect.ValueOf(resultPtr).Elem().Set(reflect.ValueOf(result).Elem())
 		return nil
 	case err := <-errCh:
 		return err
 	case <-ctx.Done():
-		return fmt.Errorf("%w: %s", ErrTimeout, ctx.Err())
+		return ctx.Err()
 	}
-}
-
-// SendMessage sends a JSON-RPC message and returns the response
-func (s *clientSession) SendMessage(message interface{}) error {
-	// Marshal the message to JSON
-	_, err := json.Marshal(message)
-	if err != nil {
-		return fmt.Errorf("failed to marshal message: %w", err)
-	}
-
-	// Check if the session is closed
-	if s.IsClosed() {
-		return ErrSessionClosed
-	}
-
-	// Send the message through the transport
-	_, err = s.transport.SendMessage(context.Background(), message.(*spec.JSONRPCMessage))
-	return err
 }
 
 // SendRequestAsync sends a request to the counterparty and returns channels for the response
@@ -157,29 +127,22 @@ func (s *clientSession) SendRequestAsync(ctx context.Context, method string, par
 	resultCh := make(chan interface{}, 1)
 	errCh := make(chan error, 1)
 
-	if ctx == nil {
-		ctx = context.Background()
-	}
-
 	// Check if the session is closed
-	s.mu.RLock()
-	if s.closed {
-		s.mu.RUnlock()
+	if s.IsClosed() {
 		errCh <- ErrSessionClosed
 		close(resultCh)
 		return resultCh, errCh
 	}
-	s.mu.RUnlock()
 
-	// Generate a new ID for the request
+	// Generate unique ID for this request
 	id := atomic.AddInt64(&s.nextID, 1)
 	idStr := fmt.Sprintf("%d", id)
-	idJSON := json.RawMessage([]byte(`"` + idStr + `"`))
+	idJSON := json.RawMessage(`"` + idStr + `"`)
 
-	// Create a context for this request that can be cancelled
+	// Create a new request context with cancellation
 	reqCtx, cancel := context.WithCancel(ctx)
 
-	// Register the pending request
+	// Register the handler for the response
 	s.mu.Lock()
 	s.handlers[idStr] = pendingRequest{
 		resultType: resultType,
@@ -241,143 +204,104 @@ func (s *clientSession) SendRequestAsync(ctx context.Context, method string, par
 		return resultCh, errCh
 	}
 
-	// If the transport is synchronous, we may already have a response
+	// Process the response if available immediately
 	if response != nil {
-		s.handleMessage(response)
+		s.handleResponse(response, idStr)
 	}
 
 	return resultCh, errCh
 }
 
-// SetNotificationHandler sets the handler for incoming notifications
+// SetNotificationHandler sets a handler for a specific notification method
 func (s *clientSession) SetNotificationHandler(method string, handler spec.NotificationHandler) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.notificationHandlers[method] = handler
 }
 
-// RemoveNotificationHandler removes a notification handler
+// RemoveNotificationHandler removes a notification handler for a specific method
 func (s *clientSession) RemoveNotificationHandler(method string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.notificationHandlers, method)
 }
 
-// NotifyToolsListChanged notifies the client that the tools list has changed
-func (s *clientSession) NotifyToolsListChanged() error {
-	return s.SendNotification(spec.MethodNotificationToolsListChanged, nil)
-}
-
-// NotifyResourcesListChanged notifies the client that the resources list has changed
-func (s *clientSession) NotifyResourcesListChanged() error {
-	return s.SendNotification(spec.MethodNotificationResourcesListChanged, nil)
-}
-
-// NotifyPromptsListChanged notifies the client that the prompts list has changed
-func (s *clientSession) NotifyPromptsListChanged() error {
-	return s.SendNotification(spec.MethodNotificationPromptsListChanged, nil)
-}
-
-// NotifyResourceChanged notifies the client that a resource has changed
-func (s *clientSession) NotifyResourceChanged(uri string, contents []byte) error {
-	s.mu.RLock()
-	subscribed := s.subscriptions[uri]
-	s.mu.RUnlock()
-
-	if subscribed {
-		params := map[string]interface{}{
-			"uri":      uri,
-			"contents": contents,
-		}
-		return s.SendNotification(spec.MethodNotificationResourceChanged, params)
-	}
-	return nil
-}
-
-// SendLogMessage sends a log message to the client
-func (s *clientSession) SendLogMessage(level spec.LogLevel, message string, logger string) error {
-	params := spec.LoggingMessage{
-		Level:   level,
-		Message: message,
-		Logger:  logger,
-	}
-	return s.SendNotification(spec.MethodNotificationMessage, params)
-}
-
-// AddSubscription adds a subscription to the specified resource URI
-func (s *clientSession) AddSubscription(uri string) error {
+// SetStreamingHandler registers a handler for streaming message responses
+func (s *clientSession) SetStreamingHandler(requestID string, handler func(*spec.CreateMessageResult)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.subscriptions[uri] = true
-	return nil
+	s.streamingHandlers[requestID] = handler
 }
 
-// RemoveSubscription removes a subscription from the specified resource URI
-func (s *clientSession) RemoveSubscription(uri string) error {
+// RemoveStreamingHandler removes a streaming handler
+func (s *clientSession) RemoveStreamingHandler(requestID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	delete(s.subscriptions, uri)
-	return nil
+	delete(s.streamingHandlers, requestID)
 }
 
-// SendNotification sends a notification to the counterparty
-func (s *clientSession) SendNotification(method string, params interface{}) error {
-	ctx, cancel := context.WithTimeout(context.Background(), s.defaultTimeout)
-	defer cancel()
-
-	errCh := s.SendNotificationAsync(ctx, method, params)
-	select {
-	case err := <-errCh:
-		return err
-	case <-ctx.Done():
-		return fmt.Errorf("%w: %s", ErrTimeout, ctx.Err())
+// SendMessage sends a JSON-RPC message directly
+func (s *clientSession) SendMessage(message interface{}) error {
+	// Check if the session is closed
+	if s.IsClosed() {
+		return ErrSessionClosed
 	}
+
+	// Marshal the message to JSON
+	_, err := json.Marshal(message)
+	if err != nil {
+		return fmt.Errorf("failed to marshal message: %w", err)
+	}
+
+	// Check if the session is closed
+	if s.IsClosed() {
+		return ErrSessionClosed
+	}
+
+	// Send the message through the transport
+	_, err = s.transport.SendMessage(context.Background(), message.(*spec.JSONRPCMessage))
+	return err
 }
 
 // SendNotificationAsync sends a notification to the counterparty asynchronously
 func (s *clientSession) SendNotificationAsync(ctx context.Context, method string, params interface{}) chan error {
 	errCh := make(chan error, 1)
 
-	if ctx == nil {
-		ctx = context.Background()
-	}
-
-	s.mu.RLock()
-	if s.closed {
-		s.mu.RUnlock()
+	// Check if the session is closed
+	if s.IsClosed() {
 		errCh <- ErrSessionClosed
 		close(errCh)
 		return errCh
 	}
-	s.mu.RUnlock()
 
-	// Create the JSON-RPC message
-	var paramsJSON json.RawMessage
-	if params != nil {
-		data, err := json.Marshal(params)
-		if err != nil {
-			errCh <- fmt.Errorf("failed to marshal parameters: %w", err)
-			close(errCh)
-			return errCh
-		}
-		paramsJSON = data
-	}
-
-	message := &spec.JSONRPCMessage{
-		JSONRPC: spec.JSONRPCVersion,
-		Method:  method,
-		Params:  paramsJSON,
-	}
-
-	// Send the message through the transport
 	go func() {
 		defer close(errCh)
+
+		// Create the JSON-RPC message
+		var paramsJSON json.RawMessage
+		if params != nil {
+			data, err := json.Marshal(params)
+			if err != nil {
+				errCh <- fmt.Errorf("failed to marshal parameters: %w", err)
+				return
+			}
+			paramsJSON = data
+		}
+
+		message := &spec.JSONRPCMessage{
+			JSONRPC: spec.JSONRPCVersion,
+			Method:  method,
+			Params:  paramsJSON,
+		}
+
+		// Send the message through the transport
 		_, err := s.transport.SendMessage(ctx, message)
 		if err != nil {
 			errCh <- fmt.Errorf("failed to send notification: %w", err)
-		} else {
-			errCh <- nil
+			return
 		}
+
+		errCh <- nil
 	}()
 
 	return errCh
@@ -407,41 +331,38 @@ func (s *clientSession) Close() error {
 
 // CloseGracefully closes the session gracefully
 func (s *clientSession) CloseGracefully(ctx context.Context) error {
-	if ctx == nil {
-		ctx = context.Background()
+	// Check if there are active handlers
+	s.mu.RLock()
+	pendingCount := len(s.handlers)
+	s.mu.RUnlock()
+
+	if pendingCount == 0 {
+		// No active handlers, close immediately
+		return s.Close()
 	}
 
-	// Create a channel to signal when all pending requests are done
+	// Create a channel to signal when all handlers are done
 	done := make(chan struct{})
-
 	go func() {
-		// Wait for all pending requests to complete or for the context to be done
-		ticker := time.NewTicker(100 * time.Millisecond)
-		defer ticker.Stop()
-
 		for {
-			select {
-			case <-ticker.C:
-				s.mu.RLock()
-				pendingCount := len(s.handlers)
-				s.mu.RUnlock()
-
-				if pendingCount == 0 {
-					close(done)
-					return
-				}
-			case <-ctx.Done():
+			time.Sleep(100 * time.Millisecond)
+			s.mu.RLock()
+			pendingCount = len(s.handlers)
+			s.mu.RUnlock()
+			if pendingCount == 0 {
+				close(done)
 				return
 			}
 		}
 	}()
 
-	// Wait for either all requests to complete or the context to be done
+	// Wait for all handlers to complete or context to be done
 	select {
 	case <-done:
 		return s.Close()
 	case <-ctx.Done():
-		return fmt.Errorf("graceful close timed out: %w", ctx.Err())
+		// Context timed out or was canceled
+		return s.Close()
 	}
 }
 
@@ -477,24 +398,24 @@ func (s *clientSession) handleMessage(message *spec.JSONRPCMessage) (*spec.JSONR
 			JSONRPC: spec.JSONRPCVersion,
 			ID:      &idCopy,
 			Error: &spec.JSONRPCError{
-				Code:    spec.ErrCodeMethodNotFound,
-				Message: "Method not found",
+				Code:    spec.ErrCodeMethodNotFound, // Ensure this constant is defined in the spec package
+				Message: "method not found",
 			},
 		}, nil
 	}
 
-	// This must be a response, find the handler
-	if message.ID == nil {
-		return nil, ErrResponseWithoutID
+	// Handle response
+	if message.IsResponse() && message.ID != nil {
+		idStr := string(*message.ID)
+		s.handleResponse(message, idStr)
+		return nil, nil
 	}
 
-	// Extract the ID
-	var idStr string
-	if err := json.Unmarshal(*message.ID, &idStr); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal response ID: %w", err)
-	}
+	return nil, fmt.Errorf("unhandled message type")
+}
 
-	// Look up the handler
+// handleResponse processes a JSON-RPC response
+func (s *clientSession) handleResponse(message *spec.JSONRPCMessage, idStr string) {
 	s.mu.Lock()
 	handler, exists := s.handlers[idStr]
 	if exists {
@@ -503,7 +424,31 @@ func (s *clientSession) handleMessage(message *spec.JSONRPCMessage) (*spec.JSONR
 	s.mu.Unlock()
 
 	if !exists {
-		return nil, fmt.Errorf("no handler for response ID: %s", idStr)
+		// Check if this is a streaming response with a requestId in the result
+		if message.Result != nil {
+			// Try to unmarshal as a CreateMessageResult to check for streaming
+			var result map[string]interface{}
+			if err := json.Unmarshal(message.Result, &result); err == nil {
+				// Check if it has a metadata field with a requestId
+				if metadata, ok := result["metadata"].(map[string]interface{}); ok {
+					if requestID, ok := metadata["requestId"].(string); ok {
+						// This is a streaming response, call the streaming handler
+						s.mu.RLock()
+						handler, exists := s.streamingHandlers[requestID]
+						s.mu.RUnlock()
+
+						if exists {
+							var msgResult spec.CreateMessageResult
+							if err := json.Unmarshal(message.Result, &msgResult); err == nil {
+								handler(&msgResult)
+							}
+						}
+						return
+					}
+				}
+			}
+		}
+		return // No handler found
 	}
 
 	// Cancel the context for this request since we've received a response
@@ -518,14 +463,14 @@ func (s *clientSession) handleMessage(message *spec.JSONRPCMessage) (*spec.JSONR
 		}
 		handler.errCh <- mcpErr
 		close(handler.resultCh)
-		return nil, nil
+		return
 	}
 
 	// Unmarshal the result
 	if message.Result == nil {
 		handler.errCh <- ErrResponseWithoutResultOrError
 		close(handler.resultCh)
-		return nil, nil
+		return
 	}
 
 	// Create a new instance of the expected result type
@@ -535,12 +480,112 @@ func (s *clientSession) handleMessage(message *spec.JSONRPCMessage) (*spec.JSONR
 	if err := json.Unmarshal(message.Result, result); err != nil {
 		handler.errCh <- fmt.Errorf("failed to unmarshal result: %w", err)
 		close(handler.resultCh)
-		return nil, nil
+		return
 	}
 
 	// Send the result to the channel
 	handler.resultCh <- reflect.ValueOf(result).Elem().Interface()
 	close(handler.errCh)
+}
 
-	return nil, nil
+// NotifyToolsListChanged sends a notification that the tools list has changed
+func (s *clientSession) NotifyToolsListChanged() error {
+	ctx, cancel := context.WithTimeout(context.Background(), s.defaultTimeout)
+	defer cancel()
+
+	errCh := s.SendNotificationAsync(ctx, spec.MethodNotificationToolsListChanged, nil)
+
+	select {
+	case err := <-errCh:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// NotifyResourcesListChanged sends a notification that the resources list has changed
+func (s *clientSession) NotifyResourcesListChanged() error {
+	ctx, cancel := context.WithTimeout(context.Background(), s.defaultTimeout)
+	defer cancel()
+
+	errCh := s.SendNotificationAsync(ctx, spec.MethodNotificationResourcesListChanged, nil)
+
+	select {
+	case err := <-errCh:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// NotifyPromptsListChanged sends a notification that the prompts list has changed
+func (s *clientSession) NotifyPromptsListChanged() error {
+	ctx, cancel := context.WithTimeout(context.Background(), s.defaultTimeout)
+	defer cancel()
+
+	errCh := s.SendNotificationAsync(ctx, spec.MethodNotificationPromptsListChanged, nil)
+
+	select {
+	case err := <-errCh:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// NotifyResourceChanged sends a notification that a specific resource has changed
+func (s *clientSession) NotifyResourceChanged(uri string, contents []byte) error {
+	ctx, cancel := context.WithTimeout(context.Background(), s.defaultTimeout)
+	defer cancel()
+
+	params := map[string]interface{}{
+		"uri":      uri,
+		"contents": contents,
+	}
+
+	errCh := s.SendNotificationAsync(ctx, spec.MethodNotificationResourceChanged, params)
+
+	select {
+	case err := <-errCh:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// AddSubscription adds a subscription for a resource URI
+func (s *clientSession) AddSubscription(uri string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.subscriptions[uri] = true
+	return nil
+}
+
+// RemoveSubscription removes a subscription for a resource URI
+func (s *clientSession) RemoveSubscription(uri string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.subscriptions, uri)
+	return nil
+}
+
+// SendLogMessage sends a log message to the client
+func (s *clientSession) SendLogMessage(level spec.LogLevel, message string, logger string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), s.defaultTimeout)
+	defer cancel()
+
+	params := spec.LoggingMessage{
+		Level:   level,
+		Message: message,
+		Logger:  logger,
+	}
+
+	errCh := s.SendNotificationAsync(ctx, spec.MethodNotificationMessage, params)
+
+	select {
+	case err := <-errCh:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }

@@ -340,6 +340,104 @@ func (c *syncClientImpl) CreateMessage(request *spec.CreateMessageRequest) (*spe
 	return &result, nil
 }
 
+// CreateMessageStream sends a create message request to the server and streams the responses.
+// The returned channels will receive partial results and errors as they become available.
+func (c *syncClientImpl) CreateMessageStream(ctx context.Context, request *spec.CreateMessageRequest) (<-chan *spec.CreateMessageResult, <-chan error) {
+	resultCh := make(chan *spec.CreateMessageResult)
+	errCh := make(chan error, 1)
+
+	if !c.initialized {
+		errCh <- errors.New("client not initialized")
+		close(resultCh)
+		return resultCh, errCh
+	}
+
+	// Apply sampling if a handler is configured
+	if c.features.SamplingHandler != nil {
+		// For now, we don't support streaming with the sampling handler
+		// In the future, we could extend SamplingHandler to support streaming
+		go func() {
+			defer close(resultCh)
+			defer close(errCh)
+
+			result, err := c.features.SamplingHandler.CreateMessage(request)
+			if err != nil {
+				errCh <- err
+				return
+			}
+			resultCh <- result
+		}()
+		return resultCh, errCh
+	}
+
+	// Check if server supports streaming
+	supportsStreaming := false
+	if c.serverCapabilities.Tools != nil {
+		supportsStreaming = c.serverCapabilities.Tools.Streaming
+	}
+
+	if !supportsStreaming {
+		// Fall back to non-streaming implementation
+		go func() {
+			defer close(resultCh)
+			defer close(errCh)
+
+			result, err := c.CreateMessage(request)
+			if err != nil {
+				errCh <- err
+				return
+			}
+			resultCh <- result
+		}()
+		return resultCh, errCh
+	}
+
+	// If streaming is supported, set up a streaming request
+	go func() {
+		defer close(resultCh)
+		defer close(errCh)
+
+		// Copy the request and add streaming flag
+		streamingRequest := *request
+		if streamingRequest.Metadata == nil {
+			streamingRequest.Metadata = make(map[string]interface{})
+		}
+		streamingRequest.Metadata["streaming"] = true
+
+		// Register a streaming handler for this request
+		requestID := util.GenerateUUID()
+		streamingRequest.Metadata["requestId"] = requestID
+
+		// Create a message handler to process streaming results
+		handler := func(message *spec.CreateMessageResult) {
+			select {
+			case resultCh <- message:
+				// Successfully sent message
+			case <-ctx.Done():
+				// Context canceled, stop processing
+				return
+			}
+		}
+
+		// Register the streaming handler
+		c.session.SetStreamingHandler(requestID, handler)
+		defer c.session.RemoveStreamingHandler(requestID)
+
+		// Send the request
+		var result spec.CreateMessageResult
+		err := c.session.SendRequest(ctx, spec.MethodSamplingCreateMessageStream, &streamingRequest, &result)
+		if err != nil {
+			errCh <- err
+			return
+		}
+
+		// The initial result may also be sent here
+		resultCh <- &result
+	}()
+
+	return resultCh, errCh
+}
+
 // SetLoggingLevel sets the minimum level for logs from the server.
 func (c *syncClientImpl) SetLoggingLevel(level spec.LogLevel) error {
 	if !c.initialized {

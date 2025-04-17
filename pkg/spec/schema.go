@@ -29,12 +29,10 @@ const (
 
 // Additional MCP server error codes
 const (
-	// ErrorCodeServerError represents a general server error
-	ErrorCodeServerError = -32099
-	// ErrorCodeClientError represents a client error
-	ErrorCodeClientError = -32098
-	// ErrorCodeInvalidRequest represents an invalid request error (maps to ErrCodeInvalidRequest)
-	ErrorCodeInvalidRequest = ErrCodeInvalidRequest
+	// ErrCodeServerError represents a general server error
+	ErrCodeServerError = -32099
+	// ErrCodeClientError represents a client error
+	ErrCodeClientError = -32098
 )
 
 // MCP method names
@@ -72,7 +70,8 @@ const (
 	MethodNotificationRootsListChanged = "notifications/roots/list_changed"
 
 	// Sampling Methods
-	MethodSamplingCreateMessage = "sampling/createMessage"
+	MethodSamplingCreateMessage       = "sampling/createMessage"
+	MethodSamplingCreateMessageStream = "sampling/createMessageStream"
 )
 
 // JSONRPCMessage represents a JSON-RPC message

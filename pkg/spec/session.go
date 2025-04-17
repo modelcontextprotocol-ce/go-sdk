@@ -129,14 +129,17 @@ type McpClientSession interface {
 	// NotifyResourcesListChanged notifies the client that the resources list has changed
 	NotifyResourcesListChanged() error
 
+	// NotifyResourceChanged notifies subscribed clients that a resource has changed
+	NotifyResourceChanged(uri string, contents []byte) error
+
 	// NotifyPromptsListChanged notifies the client that the prompts list has changed
 	NotifyPromptsListChanged() error
 
-	// NotifyResourceChanged notifies the client that a resource has changed
-	NotifyResourceChanged(uri string, contents []byte) error
-
 	// SendLogMessage sends a log message to the client
 	SendLogMessage(level LogLevel, message string, logger string) error
+
+	// CloseGracefully closes the session gracefully
+	CloseGracefully(ctx context.Context) error
 
 	// AddSubscription adds a subscription to the specified resource URI
 	AddSubscription(uri string) error
@@ -144,8 +147,11 @@ type McpClientSession interface {
 	// RemoveSubscription removes a subscription from the specified resource URI
 	RemoveSubscription(uri string) error
 
-	// CloseGracefully closes the session gracefully, waiting for pending operations to complete
-	CloseGracefully(ctx context.Context) error
+	// SetStreamingHandler registers a handler for streaming message responses
+	SetStreamingHandler(requestID string, handler func(*CreateMessageResult))
+
+	// RemoveStreamingHandler removes a streaming handler
+	RemoveStreamingHandler(requestID string)
 }
 
 // NotificationHandler defines the function signature for notification handlers
@@ -204,6 +210,7 @@ type ClientSession struct {
 	nextID               int64
 	pendingRequests      map[string]*pendingRequest
 	notificationHandlers map[string]NotificationHandler
+	streamingHandlers    map[string]func(*CreateMessageResult)
 	mu                   sync.Mutex
 }
 
@@ -218,6 +225,7 @@ func NewClientSession(transport McpTransport) (*ClientSession, error) {
 		nextID:               1,
 		pendingRequests:      make(map[string]*pendingRequest),
 		notificationHandlers: make(map[string]NotificationHandler),
+		streamingHandlers:    make(map[string]func(*CreateMessageResult)),
 	}
 
 	// If this is a client transport, establish the connection and set the message handler
@@ -570,6 +578,20 @@ func (s *ClientSession) GetClientInfo() ClientInfo {
 		},
 		fmt.Sprintf("client-%d", s.nextID),
 	)
+}
+
+// SetStreamingHandler registers a handler for streaming message responses
+func (s *ClientSession) SetStreamingHandler(requestID string, handler func(*CreateMessageResult)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.streamingHandlers[requestID] = handler
+}
+
+// RemoveStreamingHandler removes a streaming handler
+func (s *ClientSession) RemoveStreamingHandler(requestID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.streamingHandlers, requestID)
 }
 
 // ServerSession implements the McpServerSession interface
