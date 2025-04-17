@@ -45,6 +45,7 @@ const (
 	// Tool Methods
 	MethodToolsList                    = "tools/list"
 	MethodToolsCall                    = "tools/call"
+	MethodToolsStreamResult            = "notifications/tools/stream_result"
 	MethodNotificationToolsListChanged = "notifications/tools/list_changed"
 
 	// Resources Methods
@@ -484,6 +485,7 @@ type Tool struct {
 	Name        string          `json:"name"`
 	Description string          `json:"description"`
 	InputSchema json.RawMessage `json:"inputSchema"`
+	Streaming   bool            `json:"streaming,omitempty"`
 }
 
 // JsonSchema represents a JSON schema
@@ -806,8 +808,18 @@ func (b *CallToolRequestBuilder) Build() CallToolRequest {
 
 // CallToolResult represents the result of calling a tool
 type CallToolResult struct {
-	Content []Content `json:"content"`
-	IsError bool      `json:"isError,omitempty"`
+	Content     []Content `json:"content"`
+	IsError     bool      `json:"isError,omitempty"`
+	IsStreaming bool      `json:"isStreaming,omitempty"`
+	StreamID    string    `json:"streamId,omitempty"`
+}
+
+// StreamingToolResult represents a streaming result from a tool execution
+type StreamingToolResult struct {
+	StreamID string    `json:"streamId"`
+	Content  []Content `json:"content,omitempty"`
+	Error    *McpError `json:"error,omitempty"`
+	IsFinal  bool      `json:"isFinal,omitempty"`
 }
 
 // CallToolResultBuilder provides a fluent builder for CallToolResult

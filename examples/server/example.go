@@ -183,6 +183,58 @@ func EchoToolHandler(ctx context.Context, params []byte) (interface{}, error) {
 	}, nil
 }
 
+// CountingStreamToolHandler is an example of a streaming tool handler that streams numbers
+func CountingStreamToolHandler(ctx context.Context, params []byte) (chan interface{}, chan error) {
+	resultCh := make(chan interface{}, 5)
+	errCh := make(chan error, 1)
+
+	// Parse parameters
+	var p map[string]interface{}
+	if err := json.Unmarshal(params, &p); err != nil {
+		errCh <- err
+		close(resultCh)
+		return resultCh, errCh
+	}
+
+	// Get the count parameter or use default
+	count := 5
+	if countParam, ok := p["count"]; ok {
+		if countFloat, ok := countParam.(float64); ok {
+			count = int(countFloat)
+		}
+	}
+
+	// Get the delay parameter or use default
+	delay := 500 * time.Millisecond
+	if delayParam, ok := p["delay"]; ok {
+		if delayFloat, ok := delayParam.(float64); ok {
+			delay = time.Duration(delayFloat) * time.Millisecond
+		}
+	}
+
+	// Start streaming in a goroutine
+	go func() {
+		defer close(resultCh)
+		defer close(errCh)
+
+		for i := 1; i <= count; i++ {
+			select {
+			case <-ctx.Done():
+				// Context cancelled
+				errCh <- ctx.Err()
+				return
+			case <-time.After(delay):
+				// Send the current number as a text content
+				resultCh <- &spec.TextContent{
+					Text: fmt.Sprintf("Number: %d", i),
+				}
+			}
+		}
+	}()
+
+	return resultCh, errCh
+}
+
 // SimpleResourceHandler handles resource access requests
 func SimpleResourceHandler(ctx context.Context, uri string) ([]byte, error) {
 	// For demonstration purposes, we'll just return some hardcoded data
@@ -229,7 +281,7 @@ func main() {
 
 	// Create a server
 	s := server.NewSync(transportProvider).
-		WithRequestTimeout(5 * time.Second).
+		WithRequestTimeout(5*time.Second).
 		WithServerInfo(spec.Implementation{
 			Name:    "Go MCP Example Server",
 			Version: "1.0.0",
@@ -239,6 +291,13 @@ func main() {
 				Name:        "echo",
 				Description: "Echoes back the input",
 				InputSchema: []byte(`{"type":"object","properties":{"message":{"type":"string"}},"required":["message"]}`),
+				Streaming:   false,
+			},
+			spec.Tool{
+				Name:        "counting_stream",
+				Description: "Streams numbers up to a count",
+				InputSchema: []byte(`{"type":"object","properties":{"count":{"type":"integer"},"delay":{"type":"integer"}}}`),
+				Streaming:   true,
 			},
 		).
 		WithResources(
@@ -267,6 +326,10 @@ func main() {
 	// Register tool handlers
 	if err := s.RegisterToolHandler("echo", EchoToolHandler); err != nil {
 		log.Fatalf("Failed to register echo tool handler: %v", err)
+	}
+
+	if err := s.RegisterStreamToolHandler("counting_stream", CountingStreamToolHandler); err != nil {
+		log.Fatalf("Failed to register counting stream tool handler: %v", err)
 	}
 
 	// Register resource handler

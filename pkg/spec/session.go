@@ -117,41 +117,53 @@ type McpClientSession interface {
 	// SendMessage sends a JSON-RPC message and returns the response
 	SendMessage(message interface{}) error
 
+	// SendNotification sends a notification to the server
+	SendNotification(ctx context.Context, method string, params interface{}) error
+
 	// SetNotificationHandler sets the handler for incoming notifications
 	SetNotificationHandler(method string, handler NotificationHandler)
 
 	// RemoveNotificationHandler removes a notification handler
 	RemoveNotificationHandler(method string)
 
-	// NotifyToolsListChanged notifies the client that the tools list has changed
+	// NotifyToolsListChanged sends a notification that the tools list has changed
 	NotifyToolsListChanged() error
 
-	// NotifyResourcesListChanged notifies the client that the resources list has changed
+	// NotifyResourcesListChanged sends a notification that the resources list has changed
 	NotifyResourcesListChanged() error
 
-	// NotifyResourceChanged notifies subscribed clients that a resource has changed
+	// NotifyResourceChanged sends a notification that a specific resource has changed
 	NotifyResourceChanged(uri string, contents []byte) error
 
-	// NotifyPromptsListChanged notifies the client that the prompts list has changed
+	// NotifyPromptsListChanged sends a notification that the prompts list has changed
 	NotifyPromptsListChanged() error
 
-	// SendLogMessage sends a log message to the client
+	// SendLogMessage sends a log message to the server
 	SendLogMessage(level LogLevel, message string, logger string) error
 
-	// CloseGracefully closes the session gracefully
+	// CloseGracefully closes the session gracefully, waiting for pending operations to complete
 	CloseGracefully(ctx context.Context) error
 
-	// AddSubscription adds a subscription to the specified resource URI
+	// AddSubscription adds a resource subscription to the session
 	AddSubscription(uri string) error
 
-	// RemoveSubscription removes a subscription from the specified resource URI
+	// RemoveSubscription removes a resource subscription from the session
 	RemoveSubscription(uri string) error
 
-	// SetStreamingHandler registers a handler for streaming message responses
+	// GetSubscriptions returns the list of resource subscriptions for the session
+	GetSubscriptions() []string
+
+	// SetStreamingHandler registers a handler for streaming message results
 	SetStreamingHandler(requestID string, handler func(*CreateMessageResult))
 
 	// RemoveStreamingHandler removes a streaming handler
 	RemoveStreamingHandler(requestID string)
+
+	// RegisterStreamHandler registers a handler for streaming tool results
+	RegisterStreamHandler(streamID string, handler func(*StreamingToolResult))
+
+	// UnregisterStreamHandler removes a streaming tool handler
+	UnregisterStreamHandler(streamID string)
 }
 
 // NotificationHandler defines the function signature for notification handlers
@@ -211,8 +223,22 @@ type ClientSession struct {
 	pendingRequests      map[string]*pendingRequest
 	notificationHandlers map[string]NotificationHandler
 	streamingHandlers    map[string]func(*CreateMessageResult)
+	subscriptions        map[string]bool // Track subscribed resource URIs
 	mu                   sync.Mutex
 }
+
+// StreamingToolHandlers holds the registered streaming tool handlers
+type streamHandlers struct {
+	handlers map[string]func(*StreamingToolResult)
+	mu       sync.RWMutex
+}
+
+// Add a private field to ClientSession to store stream handlers
+var (
+	streamHandlersSingleton = &streamHandlers{
+		handlers: make(map[string]func(*StreamingToolResult)),
+	}
+)
 
 // NewClientSession creates a new client session
 func NewClientSession(transport McpTransport) (*ClientSession, error) {
@@ -226,6 +252,7 @@ func NewClientSession(transport McpTransport) (*ClientSession, error) {
 		pendingRequests:      make(map[string]*pendingRequest),
 		notificationHandlers: make(map[string]NotificationHandler),
 		streamingHandlers:    make(map[string]func(*CreateMessageResult)),
+		subscriptions:        make(map[string]bool),
 	}
 
 	// If this is a client transport, establish the connection and set the message handler
@@ -550,15 +577,75 @@ func (s *ClientSession) CloseGracefully(ctx context.Context) error {
 
 // AddSubscription adds a subscription to the specified resource URI
 func (s *ClientSession) AddSubscription(uri string) error {
-	// In a real implementation, this would track subscriptions so that
-	// NotifyResourceChanged could filter notifications to only subscribed resources
+	if uri == "" {
+		return fmt.Errorf("resource URI cannot be empty")
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.subscriptions[uri] = true
 	return nil
 }
 
 // RemoveSubscription removes a subscription from the specified resource URI
 func (s *ClientSession) RemoveSubscription(uri string) error {
-	// In a real implementation, this would remove the subscription tracking
+	if uri == "" {
+		return fmt.Errorf("resource URI cannot be empty")
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.subscriptions, uri)
 	return nil
+}
+
+// GetSubscriptions returns the list of resource subscriptions for the session
+func (s *ClientSession) GetSubscriptions() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	subscriptions := make([]string, 0, len(s.subscriptions))
+	for uri := range s.subscriptions {
+		subscriptions = append(subscriptions, uri)
+	}
+	return subscriptions
+}
+
+// RegisterStreamHandler registers a handler for streaming tool results
+func (s *ClientSession) RegisterStreamHandler(streamID string, handler func(*StreamingToolResult)) {
+	streamHandlersSingleton.mu.Lock()
+	defer streamHandlersSingleton.mu.Unlock()
+	streamHandlersSingleton.handlers[streamID] = handler
+
+	// Register the notification handler for tool stream results if not already done
+	s.mu.Lock()
+	_, exists := s.notificationHandlers[MethodToolsStreamResult]
+	s.mu.Unlock()
+
+	if !exists {
+		s.SetNotificationHandler(MethodToolsStreamResult, func(ctx context.Context, params json.RawMessage) error {
+			var streamResult StreamingToolResult
+			if err := json.Unmarshal(params, &streamResult); err != nil {
+				return fmt.Errorf("failed to unmarshal streaming tool result: %w", err)
+			}
+
+			streamHandlersSingleton.mu.RLock()
+			handler, ok := streamHandlersSingleton.handlers[streamResult.StreamID]
+			streamHandlersSingleton.mu.RUnlock()
+
+			if ok {
+				handler(&streamResult)
+			}
+
+			return nil
+		})
+	}
+}
+
+// UnregisterStreamHandler removes a streaming tool handler
+func (s *ClientSession) UnregisterStreamHandler(streamID string) {
+	streamHandlersSingleton.mu.Lock()
+	defer streamHandlersSingleton.mu.Unlock()
+	delete(streamHandlersSingleton.handlers, streamID)
 }
 
 // GetID returns the unique identifier for this client session

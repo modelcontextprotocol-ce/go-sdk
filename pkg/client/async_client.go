@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"time"
 
@@ -356,6 +357,121 @@ func (c *asyncClientImpl) ExecuteToolAsync(ctx context.Context, name string, par
 	}()
 
 	return resultCh, errCh
+}
+
+// ExecuteToolStream executes a streaming tool on the server.
+// It returns a channel that receives content as it becomes available and a channel for errors.
+// The contents channel will be closed when streaming is complete.
+func (c *asyncClientImpl) ExecuteToolStream(ctx context.Context, name string, params interface{}) (chan []spec.Content, chan error) {
+	contentCh := make(chan []spec.Content, 10) // Buffer a few content updates
+	errCh := make(chan error, 1)
+
+	if !c.initialized {
+		errCh <- errors.New("client not initialized")
+		close(contentCh)
+		return contentCh, errCh
+	}
+
+	util.AssertNotEmpty(name, "Tool name must not be empty")
+
+	// If no context is provided, create one with default timeout
+	if ctx == nil {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(context.Background(), c.requestTimeout)
+		defer cancel()
+	}
+
+	// Copy params and add streaming flag
+	paramsCopy := make(map[string]interface{})
+	if paramsMap := util.ToMap(params); paramsMap != nil {
+		for k, v := range paramsMap {
+			paramsCopy[k] = v
+		}
+	}
+	paramsCopy["_streaming"] = true
+
+	// Create the request payload
+	requestParams := &spec.CallToolRequest{
+		Name:      name,
+		Arguments: paramsCopy,
+	}
+
+	// Register a handler for streaming tool results
+	// This needs to be done before sending the request to handle all notifications
+	streamHandler := func(streamResult *spec.StreamingToolResult) {
+		if streamResult.Error != nil {
+			select {
+			case errCh <- streamResult.Error:
+			default:
+				// Error channel might be closed already
+			}
+			return
+		}
+
+		if streamResult.IsFinal {
+			close(contentCh)
+			close(errCh)
+			return
+		}
+
+		// Send content if available
+		if len(streamResult.Content) > 0 {
+			select {
+			case contentCh <- streamResult.Content:
+			case <-ctx.Done():
+				// Context cancelled
+			}
+		}
+	}
+
+	go func() {
+		// Handle any panics
+		defer func() {
+			if r := recover(); r != nil {
+				errCh <- fmt.Errorf("panic in ExecuteToolStream: %v", r)
+				close(contentCh)
+				close(errCh)
+			}
+		}()
+
+		// Create a variable to hold the initial result
+		var callResult spec.CallToolResult
+		err := c.session.SendRequest(ctx, spec.MethodToolsCall, requestParams, &callResult)
+		if err != nil {
+			errCh <- err
+			close(contentCh)
+			return
+		}
+
+		// Check if streaming was initialized successfully
+		if !callResult.IsStreaming || callResult.StreamID == "" {
+			errCh <- fmt.Errorf("server does not support streaming for tool %s", name)
+			close(contentCh)
+			return
+		}
+
+		// Register handler for streaming notifications with this streamID
+		c.session.RegisterStreamHandler(callResult.StreamID, streamHandler)
+
+		// Return any initial content provided in the response
+		if len(callResult.Content) > 0 {
+			contentCh <- callResult.Content
+		}
+
+		// Handle context cancellation
+		<-ctx.Done()
+		// If context is done, make sure channels are closed properly
+		select {
+		case errCh <- ctx.Err():
+			// Error sent successfully
+		default:
+			// Channel might be closed already
+		}
+
+		c.session.UnregisterStreamHandler(callResult.StreamID)
+	}()
+
+	return contentCh, errCh
 }
 
 // GetResources returns the list of resources provided by the server.

@@ -105,6 +105,56 @@ func messageToString(message *spec.JSONRPCMessage) string {
 	return "Unknown message type"
 }
 
+// StreamingExample demonstrates using a streaming tool
+func StreamingExample(c client.McpSyncClient) error {
+	fmt.Println("\n--- Streaming Tool Example ---")
+
+	// Create a context with timeout for the streaming operation
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// Define parameters for the counting stream tool
+	params := map[string]interface{}{
+		"count": 10,  // Stream 10 numbers
+		"delay": 300, // 300ms delay between each number
+	}
+
+	fmt.Println("Executing streaming tool 'counting_stream'...")
+
+	// Execute the streaming tool
+	contentCh, errCh := c.ExecuteToolStream(ctx, "counting_stream", params)
+
+	// Process the streaming results
+	for {
+		select {
+		case content, ok := <-contentCh:
+			if !ok {
+				// Channel closed, streaming is complete
+				fmt.Println("Streaming complete!")
+				return nil
+			}
+
+			// Print each content item received
+			for _, item := range content {
+				if textContent, ok := item.(*spec.TextContent); ok {
+					fmt.Printf("Received: %s\n", textContent.Text)
+				} else {
+					fmt.Printf("Received non-text content: %v\n", item)
+				}
+			}
+
+		case err, ok := <-errCh:
+			if !ok {
+				continue // Error channel closed without errors
+			}
+			return fmt.Errorf("streaming error: %v", err)
+
+		case <-ctx.Done():
+			return fmt.Errorf("streaming timed out: %v", ctx.Err())
+		}
+	}
+}
+
 func main() {
 	// Create a transport
 	transport := &SimpleStdioTransport{}
@@ -168,6 +218,12 @@ func main() {
 	}
 
 	fmt.Printf("Message created: role=%s, content=%s\n", result.Role, result.Content)
+
+	// Demonstrate streaming tool usage
+	err = StreamingExample(c)
+	if err != nil {
+		log.Fatalf("Streaming example failed: %v", err)
+	}
 
 	// Close the client
 	err = c.Close()

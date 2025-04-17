@@ -39,6 +39,11 @@ type McpClient interface {
 	// ExecuteTool executes a tool on the server.
 	ExecuteTool(name string, params interface{}, resultPtr interface{}) error
 
+	// ExecuteToolStream executes a tool on the server with streaming support.
+	// It returns a channel that receives content as it becomes available and a channel for errors.
+	// The contents channel will be closed when streaming is complete.
+	ExecuteToolStream(ctx context.Context, name string, params interface{}) (chan []spec.Content, chan error)
+
 	// GetResources returns the list of resources provided by the server.
 	GetResources() ([]spec.Resource, error)
 

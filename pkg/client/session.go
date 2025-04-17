@@ -35,6 +35,7 @@ type clientSession struct {
 	handlers             map[string]pendingRequest
 	notificationHandlers map[string]spec.NotificationHandler
 	streamingHandlers    map[string]func(*spec.CreateMessageResult)
+	streamHandlers       map[string]func(*spec.StreamingToolResult)
 	clientInfo           spec.ClientInfo
 	mu                   sync.RWMutex
 	closed               bool
@@ -74,6 +75,7 @@ func NewClientSession(transport spec.McpClientTransport, defaultTimeout time.Dur
 		handlers:             make(map[string]pendingRequest),
 		notificationHandlers: make(map[string]spec.NotificationHandler),
 		streamingHandlers:    make(map[string]func(*spec.CreateMessageResult)),
+		streamHandlers:       make(map[string]func(*spec.StreamingToolResult)),
 		clientInfo:           clientInfo,
 		defaultTimeout:       defaultTimeout,
 		subscriptions:        make(map[string]bool),
@@ -305,6 +307,38 @@ func (s *clientSession) SendNotificationAsync(ctx context.Context, method string
 	}()
 
 	return errCh
+}
+
+// SendNotification sends a notification to the server
+func (s *clientSession) SendNotification(ctx context.Context, method string, params interface{}) error {
+	// Check if the session is closed
+	if s.IsClosed() {
+		return ErrSessionClosed
+	}
+
+	// Create the JSON-RPC message
+	var paramsJSON json.RawMessage
+	if params != nil {
+		data, err := json.Marshal(params)
+		if err != nil {
+			return fmt.Errorf("failed to marshal parameters: %w", err)
+		}
+		paramsJSON = data
+	}
+
+	message := &spec.JSONRPCMessage{
+		JSONRPC: spec.JSONRPCVersion,
+		Method:  method,
+		Params:  paramsJSON,
+	}
+
+	// Send the message through the transport
+	_, err := s.transport.SendMessage(ctx, message)
+	if err != nil {
+		return fmt.Errorf("failed to send notification: %w", err)
+	}
+
+	return nil
 }
 
 // Close closes the session and releases any associated resources
@@ -569,6 +603,18 @@ func (s *clientSession) RemoveSubscription(uri string) error {
 	return nil
 }
 
+// GetSubscriptions returns the list of resource subscriptions for the session
+func (s *clientSession) GetSubscriptions() []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	subscriptions := make([]string, 0, len(s.subscriptions))
+	for uri := range s.subscriptions {
+		subscriptions = append(subscriptions, uri)
+	}
+	return subscriptions
+}
+
 // SendLogMessage sends a log message to the client
 func (s *clientSession) SendLogMessage(level spec.LogLevel, message string, logger string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), s.defaultTimeout)
@@ -587,5 +633,50 @@ func (s *clientSession) SendLogMessage(level spec.LogLevel, message string, logg
 		return err
 	case <-ctx.Done():
 		return ctx.Err()
+	}
+}
+
+// RegisterStreamHandler registers a handler for streaming tool results
+func (s *clientSession) RegisterStreamHandler(streamID string, handler func(*spec.StreamingToolResult)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Create a singleton for stream handlers if needed
+	if s.streamHandlers == nil {
+		s.streamHandlers = make(map[string]func(*spec.StreamingToolResult))
+	}
+
+	// Register the handler for this stream ID
+	s.streamHandlers[streamID] = handler
+
+	// Register the notification handler for tool stream results if not already done
+	_, exists := s.notificationHandlers[spec.MethodToolsStreamResult]
+	if !exists {
+		s.notificationHandlers[spec.MethodToolsStreamResult] = func(ctx context.Context, params json.RawMessage) error {
+			var streamResult spec.StreamingToolResult
+			if err := json.Unmarshal(params, &streamResult); err != nil {
+				return fmt.Errorf("failed to unmarshal streaming tool result: %w", err)
+			}
+
+			s.mu.RLock()
+			handler, ok := s.streamHandlers[streamResult.StreamID]
+			s.mu.RUnlock()
+
+			if ok {
+				handler(&streamResult)
+			}
+
+			return nil
+		}
+	}
+}
+
+// UnregisterStreamHandler removes a streaming tool handler
+func (s *clientSession) UnregisterStreamHandler(streamID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.streamHandlers != nil {
+		delete(s.streamHandlers, streamID)
 	}
 }

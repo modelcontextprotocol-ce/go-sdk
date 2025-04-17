@@ -54,6 +54,14 @@ type McpSyncServer interface {
 	// The handler will be called when a client requests to execute the tool.
 	RegisterToolHandler(name string, handler ToolHandler) error
 
+	// RegisterStreamingToolHandler registers a handler for a specific tool that supports streaming results.
+	// The handler will be called when a client requests to execute the tool with streaming support.
+	RegisterStreamingToolHandler(name string, handler StreamingToolHandler) error
+
+	// RegisterStreamToolHandler registers a handler for a specific tool that supports streaming results.
+	// This is an alias for RegisterStreamingToolHandler to conform with MCP specification naming.
+	RegisterStreamToolHandler(name string, handler StreamingToolHandler) error
+
 	// RegisterResourceHandler registers a handler for accessing resources.
 	RegisterResourceHandler(handler ResourceHandler) error
 
@@ -124,6 +132,10 @@ type CreateMessageHandler func(ctx context.Context, request spec.CreateMessageRe
 
 // ToolHandler processes tool execution requests synchronously.
 type ToolHandler func(ctx context.Context, params []byte) (interface{}, error)
+
+// StreamingToolHandler processes tool execution requests with streaming results.
+// It returns a channel for streaming results and an error channel.
+type StreamingToolHandler func(ctx context.Context, params []byte) (chan interface{}, chan error)
 
 // ResourceHandler processes resource access requests synchronously.
 type ResourceHandler func(ctx context.Context, uri string) ([]byte, error)

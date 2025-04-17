@@ -14,18 +14,19 @@ import (
 
 // syncServerImpl implements the McpSyncServer interface
 type syncServerImpl struct {
-	transportProvider    spec.McpServerTransportProvider
-	transport            spec.McpServerTransport
-	requestTimeout       time.Duration
-	features             *ServerFeatures
-	createMessageHandler CreateMessageHandler
-	toolHandlers         map[string]ToolHandler
-	resourceHandler      ResourceHandler
-	promptHandler        PromptHandler
-	mu                   sync.RWMutex
-	running              bool
-	clients              map[string]spec.McpClientSession
-	clientsMu            sync.RWMutex
+	transportProvider     spec.McpServerTransportProvider
+	transport             spec.McpServerTransport
+	requestTimeout        time.Duration
+	features              *ServerFeatures
+	createMessageHandler  CreateMessageHandler
+	toolHandlers          map[string]ToolHandler
+	streamingToolHandlers map[string]StreamingToolHandler
+	resourceHandler       ResourceHandler
+	promptHandler         PromptHandler
+	mu                    sync.RWMutex
+	running               bool
+	clients               map[string]spec.McpClientSession
+	clientsMu             sync.RWMutex
 }
 
 // Start implements McpServer
@@ -203,6 +204,29 @@ func (s *syncServerImpl) RegisterToolHandler(name string, handler ToolHandler) e
 	return nil
 }
 
+// RegisterStreamingToolHandler implements McpSyncServer
+func (s *syncServerImpl) RegisterStreamingToolHandler(name string, handler StreamingToolHandler) error {
+	util.AssertNotNil(name, "Tool name must not be nil")
+	util.AssertNotNil(handler, "Streaming tool handler must not be nil")
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.streamingToolHandlers == nil {
+		s.streamingToolHandlers = make(map[string]StreamingToolHandler)
+	}
+
+	s.streamingToolHandlers[name] = handler
+	return nil
+}
+
+// RegisterStreamToolHandler implements McpSyncServer
+// This is an alias for RegisterStreamingToolHandler to conform with MCP specification naming
+func (s *syncServerImpl) RegisterStreamToolHandler(name string, handler StreamingToolHandler) error {
+	// Simply delegate to the existing RegisterStreamingToolHandler method
+	return s.RegisterStreamingToolHandler(name, handler)
+}
+
 // RegisterResourceHandler implements McpSyncServer
 func (s *syncServerImpl) RegisterResourceHandler(handler ResourceHandler) error {
 	util.AssertNotNil(handler, "Resource handler must not be nil")
@@ -378,6 +402,127 @@ func (s *syncServerImpl) handleToolsList(ctx context.Context, session spec.McpCl
 }
 
 func (s *syncServerImpl) handleToolsCall(ctx context.Context, session spec.McpClientSession, request *spec.CallToolRequest) (*spec.CallToolResult, error) {
+	// Check if there's a streaming handler first
+	s.mu.RLock()
+	streamingHandler, hasStreamingHandler := s.streamingToolHandlers[request.Name]
+	s.mu.RUnlock()
+
+	// If streaming is requested and available, handle streaming execution
+	if hasStreamingHandler && request.Arguments != nil {
+		if streamingParam, ok := request.Arguments["_streaming"]; ok && streamingParam == true {
+			// Remove the streaming parameter from the arguments
+			argsCopy := make(map[string]interface{})
+			for k, v := range request.Arguments {
+				if k != "_streaming" {
+					argsCopy[k] = v
+				}
+			}
+
+			// Convert arguments to JSON bytes
+			params, err := json.Marshal(argsCopy)
+			if err != nil {
+				return nil, &spec.McpError{
+					Code:    spec.ErrCodeInvalidParams,
+					Message: "invalid arguments: " + err.Error(),
+				}
+			}
+
+			// Start streaming execution
+			resultCh, errCh := streamingHandler(ctx, params)
+
+			// Send initial response to confirm streaming has started
+			initialResult := &spec.CallToolResult{
+				Content:     []spec.Content{},
+				IsStreaming: true,
+				StreamID:    request.Name + "-" + util.GenerateShortUUID(),
+			}
+
+			// Start a goroutine to handle the streaming
+			go func(streamID string) {
+				defer func() {
+					// Send end of stream marker
+					endMarker := &spec.StreamingToolResult{
+						StreamID: streamID,
+						IsFinal:  true,
+					}
+
+					endMarkerBytes, _ := json.Marshal(endMarker)
+					session.SendNotification(context.Background(), spec.MethodToolsStreamResult, endMarkerBytes)
+				}()
+
+				for {
+					select {
+					case result, ok := <-resultCh:
+						if !ok {
+							// Channel closed, end of streaming
+							return
+						}
+
+						// Convert the result to content
+						var content []spec.Content
+						switch v := result.(type) {
+						case spec.Content:
+							content = []spec.Content{v}
+						case []spec.Content:
+							content = v
+						default:
+							// For other types, convert to string and return as text content
+							text, err := json.Marshal(v)
+							if err != nil {
+								// Log the error but continue
+								continue
+							}
+							content = []spec.Content{&spec.TextContent{
+								Text: string(text),
+							}}
+						}
+
+						// Create and send streaming notification
+						streamResult := &spec.StreamingToolResult{
+							StreamID: streamID,
+							Content:  content,
+						}
+
+						resultBytes, err := json.Marshal(streamResult)
+						if err != nil {
+							continue
+						}
+
+						// Send the notification
+						session.SendNotification(context.Background(), spec.MethodToolsStreamResult, resultBytes)
+
+					case err, ok := <-errCh:
+						if !ok {
+							// Error channel closed
+							return
+						}
+
+						// Send error notification
+						if err != nil {
+							errorResult := &spec.StreamingToolResult{
+								StreamID: streamID,
+								Error: &spec.McpError{
+									Code:    spec.ErrCodeInternalError,
+									Message: err.Error(),
+								},
+							}
+
+							errorBytes, _ := json.Marshal(errorResult)
+							session.SendNotification(context.Background(), spec.MethodToolsStreamResult, errorBytes)
+						}
+
+					case <-ctx.Done():
+						// Context is done, end streaming
+						return
+					}
+				}
+			}(initialResult.StreamID)
+
+			return initialResult, nil
+		}
+	}
+
+	// If not streaming or no streaming handler available, use regular tool handler
 	s.mu.RLock()
 	handler, ok := s.toolHandlers[request.Name]
 	s.mu.RUnlock()
