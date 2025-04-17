@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"sync"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/pkg/spec"
@@ -1054,4 +1055,243 @@ func (c *asyncClientImpl) PingAsync(ctx context.Context) chan error {
 	}()
 
 	return errCh
+}
+
+// ExecuteToolsParallel executes multiple tools on the server in parallel.
+// The toolCalls parameter is a map where keys are tool names and values are the parameters to pass to each tool.
+// The results parameter is a map where keys are tool names and values are pointers to store the results.
+// Returns a map of tool names to errors for any failed tool executions.
+func (c *asyncClientImpl) ExecuteToolsParallel(ctx context.Context, toolCalls map[string]interface{}, results map[string]interface{}) map[string]error {
+	if ctx == nil {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(context.Background(), c.requestTimeout)
+		defer cancel()
+	}
+
+	// Execute tools in parallel and wait for all of them to complete
+	resultCh, errCh := c.ExecuteToolsParallelAsync(ctx, toolCalls, results)
+
+	var errorMap map[string]error
+
+	// Wait for either a result, error, or context cancellation
+	select {
+	case result := <-resultCh:
+		// Loop through the result map and use reflection to store the values in the provided pointers
+		for toolName, resultValue := range result {
+			resultPtr, exists := results[toolName]
+			if exists {
+				// Use reflection to set the pointer value
+				ptrValue := reflect.ValueOf(resultPtr)
+				if ptrValue.Kind() == reflect.Ptr && !ptrValue.IsNil() {
+					ptrValue.Elem().Set(reflect.ValueOf(resultValue).Elem())
+				}
+			}
+		}
+		return make(map[string]error) // Return empty error map if successful
+	case err := <-errCh:
+		// If we got a consolidated error, create an error map where all tools have the same error
+		errorMap = make(map[string]error)
+		for toolName := range toolCalls {
+			errorMap[toolName] = err
+		}
+		return errorMap
+	case <-ctx.Done():
+		// If context was cancelled, create an error map with the context error
+		errorMap = make(map[string]error)
+		for toolName := range toolCalls {
+			errorMap[toolName] = ctx.Err()
+		}
+		return errorMap
+	}
+}
+
+// ExecuteToolsParallelAsync executes multiple tools on the server in parallel asynchronously.
+// The toolCalls parameter is a map where keys are tool names and values are the parameters to pass to each tool.
+// The resultTypes parameter is a map where keys are tool names and values are the expected result types.
+// Returns two channels: one for results (map of tool names to results) and one for errors.
+func (c *asyncClientImpl) ExecuteToolsParallelAsync(ctx context.Context, toolCalls map[string]interface{}, resultTypes map[string]interface{}) (chan map[string]interface{}, chan error) {
+	resultCh := make(chan map[string]interface{}, 1)
+	errCh := make(chan error, 1)
+
+	if !c.initialized {
+		errCh <- errors.New("client not initialized")
+		close(resultCh)
+		return resultCh, errCh
+	}
+
+	if ctx == nil {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(context.Background(), c.requestTimeout)
+		defer cancel()
+	}
+
+	go func() {
+		defer close(resultCh)
+		defer close(errCh)
+
+		// Get the maximum number of tools that can be executed in parallel
+		maxParallelism := 1 // Default to sequential execution
+		if c.clientCapabilities.MaxToolParallelism > 0 {
+			maxParallelism = c.clientCapabilities.MaxToolParallelism
+		}
+
+		// Check if server supports parallel execution
+		supportsParallel := false
+		if c.serverCapabilities.Tools != nil {
+			supportsParallel = c.serverCapabilities.Tools.Parallel
+		}
+
+		// If server or client doesn't support parallel execution, fall back to sequential
+		if !supportsParallel || maxParallelism == 1 {
+			toolResults, err := c.executeToolsSequentialAsync(ctx, toolCalls, resultTypes)
+			if err != nil {
+				errCh <- err
+				return
+			}
+			resultCh <- toolResults
+			return
+		}
+
+		// Execute tools in parallel
+		toolResults, err := c.executeToolsParallelAsync(ctx, toolCalls, resultTypes, maxParallelism)
+		if err != nil {
+			errCh <- err
+			return
+		}
+		resultCh <- toolResults
+	}()
+
+	return resultCh, errCh
+}
+
+// executeToolsSequentialAsync executes tools one at a time asynchronously
+func (c *asyncClientImpl) executeToolsSequentialAsync(ctx context.Context, toolCalls map[string]interface{}, resultTypes map[string]interface{}) (map[string]interface{}, error) {
+	results := make(map[string]interface{})
+
+	for toolName, params := range toolCalls {
+		resultType, exists := resultTypes[toolName]
+		if !exists {
+			return nil, fmt.Errorf("no result type provided for tool %s", toolName)
+		}
+
+		// Create a context that will be cancelled if the parent context is cancelled
+		toolCtx, cancel := context.WithCancel(ctx)
+		defer cancel()
+
+		// Add a goroutine to cancel this context if the parent is cancelled
+		go func() {
+			select {
+			case <-ctx.Done():
+				cancel()
+			case <-toolCtx.Done():
+				// Tool completed or was cancelled
+			}
+		}()
+
+		// Execute the tool and wait for the result
+		resultCh, errCh := c.ExecuteToolAsync(toolCtx, toolName, params, resultType)
+
+		select {
+		case result := <-resultCh:
+			results[toolName] = result
+		case err := <-errCh:
+			return nil, fmt.Errorf("error executing tool %s: %w", toolName, err)
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+
+	return results, nil
+}
+
+// executeToolsParallelAsync executes tools in parallel with a limit on concurrency
+func (c *asyncClientImpl) executeToolsParallelAsync(ctx context.Context, toolCalls map[string]interface{}, resultTypes map[string]interface{}, maxConcurrent int) (map[string]interface{}, error) {
+	results := make(map[string]interface{})
+	resultsMutex := sync.Mutex{}
+
+	// Create a cancellable context for all tool executions
+	execCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	// Create a wait group to synchronize all goroutines
+	var wg sync.WaitGroup
+
+	// Create a semaphore to limit concurrency
+	sem := make(chan struct{}, maxConcurrent)
+
+	// Channel for errors
+	errorCh := make(chan error, len(toolCalls))
+
+	// Start a goroutine for each tool
+	for toolName, params := range toolCalls {
+		resultType, exists := resultTypes[toolName]
+		if !exists {
+			errorCh <- fmt.Errorf("no result type provided for tool %s", toolName)
+			continue
+		}
+
+		wg.Add(1)
+		go func(name string, p interface{}, rt interface{}) {
+			defer wg.Done()
+
+			// Acquire semaphore
+			select {
+			case sem <- struct{}{}:
+				// Acquired semaphore
+				defer func() { <-sem }() // Release semaphore
+			case <-execCtx.Done():
+				// Context cancelled while waiting for semaphore
+				errorCh <- execCtx.Err()
+				return
+			}
+
+			// Execute the tool
+			resultCh, errToolCh := c.ExecuteToolAsync(execCtx, name, p, rt)
+
+			// Wait for result or error
+			select {
+			case result := <-resultCh:
+				// Store the result
+				resultsMutex.Lock()
+				results[name] = result
+				resultsMutex.Unlock()
+			case err := <-errToolCh:
+				// Send error to error channel
+				errorCh <- fmt.Errorf("error executing tool %s: %w", name, err)
+				// Cancel all other executions
+				cancel()
+			case <-execCtx.Done():
+				// Context cancelled
+				errorCh <- execCtx.Err()
+			}
+		}(toolName, params, resultType)
+	}
+
+	// Wait for all tools to complete or context to be cancelled
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+		close(errorCh)
+	}()
+
+	// Wait for either completion or an error
+	select {
+	case <-done:
+		// Check if we have any errors
+		select {
+		case err := <-errorCh:
+			return nil, err
+		default:
+			// No errors
+			return results, nil
+		}
+	case err := <-errorCh:
+		// Got an error, cancel and return
+		cancel()
+		return nil, err
+	case <-ctx.Done():
+		// Context cancelled
+		return nil, ctx.Err()
+	}
 }

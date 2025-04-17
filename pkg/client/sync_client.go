@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/pkg/spec"
@@ -290,6 +291,146 @@ func (c *syncClientImpl) ExecuteToolStream(ctx context.Context, name string, par
 	}()
 
 	return contentCh, errCh
+}
+
+// ExecuteToolsParallel executes multiple tools on the server in parallel.
+// The toolCalls parameter is a map where keys are tool names and values are the parameters to pass to each tool.
+// The results parameter is a map where keys are tool names and values are pointers to store the results.
+// Returns a map of tool names to errors for any failed tool executions.
+func (c *syncClientImpl) ExecuteToolsParallel(ctx context.Context, toolCalls map[string]interface{}, results map[string]interface{}) map[string]error {
+	if !c.initialized {
+		errorMap := make(map[string]error)
+		for toolName := range toolCalls {
+			errorMap[toolName] = errors.New("client not initialized")
+		}
+		return errorMap
+	}
+
+	if ctx == nil {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(context.Background(), c.requestTimeout)
+		defer cancel()
+	}
+
+	// Get the maximum number of tools that can be executed in parallel
+	maxParallelism := 1 // Default to sequential execution
+	if c.clientCapabilities.MaxToolParallelism > 0 {
+		maxParallelism = c.clientCapabilities.MaxToolParallelism
+	}
+
+	// Check if server supports parallel execution
+	supportsParallel := false
+	if c.serverCapabilities.Tools != nil {
+		supportsParallel = c.serverCapabilities.Tools.Parallel
+	}
+
+	// If server or client doesn't support parallel execution, fall back to sequential
+	if !supportsParallel || maxParallelism == 1 {
+		return c.executeToolsSequential(ctx, toolCalls, results)
+	}
+
+	// Execute tools in parallel
+	return c.executeToolsParallel(ctx, toolCalls, results, maxParallelism)
+}
+
+// executeToolsSequential executes tools one at a time
+func (c *syncClientImpl) executeToolsSequential(ctx context.Context, toolCalls map[string]interface{}, results map[string]interface{}) map[string]error {
+	errorMap := make(map[string]error)
+
+	for toolName, params := range toolCalls {
+		resultPtr, exists := results[toolName]
+		if !exists {
+			errorMap[toolName] = fmt.Errorf("no result pointer provided for tool %s", toolName)
+			continue
+		}
+
+		err := c.ExecuteTool(toolName, params, resultPtr)
+		if err != nil {
+			errorMap[toolName] = err
+		}
+
+		// Check if context is cancelled
+		select {
+		case <-ctx.Done():
+			// Add context error for remaining tools
+			for name := range toolCalls {
+				if _, processed := errorMap[name]; !processed {
+					errorMap[name] = ctx.Err()
+				}
+			}
+			return errorMap
+		default:
+			// Continue processing
+		}
+	}
+
+	return errorMap
+}
+
+// executeToolsParallel executes tools in parallel with a limit on concurrency
+func (c *syncClientImpl) executeToolsParallel(ctx context.Context, toolCalls map[string]interface{}, results map[string]interface{}, maxConcurrent int) map[string]error {
+	errorMap := make(map[string]error)
+	errorMapMutex := sync.Mutex{}
+
+	// Create a wait group to synchronize all goroutines
+	var wg sync.WaitGroup
+
+	// Create a semaphore to limit concurrency
+	sem := make(chan struct{}, maxConcurrent)
+
+	// Start a goroutine for each tool
+	for toolName, params := range toolCalls {
+		resultPtr, exists := results[toolName]
+		if !exists {
+			errorMapMutex.Lock()
+			errorMap[toolName] = fmt.Errorf("no result pointer provided for tool %s", toolName)
+			errorMapMutex.Unlock()
+			continue
+		}
+
+		wg.Add(1)
+		go func(name string, p interface{}, r interface{}) {
+			defer wg.Done()
+
+			// Acquire semaphore
+			sem <- struct{}{}
+			defer func() { <-sem }() // Release semaphore
+
+			// Execute the tool
+			err := c.ExecuteTool(name, p, r)
+			if err != nil {
+				errorMapMutex.Lock()
+				errorMap[name] = err
+				errorMapMutex.Unlock()
+			}
+		}(toolName, params, resultPtr)
+	}
+
+	// Wait for all tools to complete or context to be cancelled
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
+	// Wait for either completion or context cancellation
+	select {
+	case <-done:
+		// All tools completed
+		return errorMap
+	case <-ctx.Done():
+		// Context cancelled
+		errorMapMutex.Lock()
+		defer errorMapMutex.Unlock()
+
+		// Add context error for all tools that didn't complete
+		for toolName := range toolCalls {
+			if _, exists := errorMap[toolName]; !exists {
+				errorMap[toolName] = ctx.Err()
+			}
+		}
+		return errorMap
+	}
 }
 
 // GetResources retrieves the list of available resources from the server

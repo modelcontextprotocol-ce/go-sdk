@@ -39,6 +39,12 @@ type McpClient interface {
 	// ExecuteTool executes a tool on the server.
 	ExecuteTool(name string, params interface{}, resultPtr interface{}) error
 
+	// ExecuteToolsParallel executes multiple tools on the server in parallel.
+	// The toolCalls parameter is a map where keys are tool names and values are the parameters to pass to each tool.
+	// The results parameter is a map where keys are tool names and values are pointers to store the results.
+	// Returns a map of tool names to errors for any failed tool executions.
+	ExecuteToolsParallel(ctx context.Context, toolCalls map[string]interface{}, results map[string]interface{}) map[string]error
+
 	// ExecuteToolStream executes a tool on the server with streaming support.
 	// It returns a channel that receives content as it becomes available and a channel for errors.
 	// The contents channel will be closed when streaming is complete.
@@ -93,6 +99,11 @@ type McpAsyncClient interface {
 
 	// ExecuteToolAsync executes a tool on the server asynchronously.
 	ExecuteToolAsync(ctx context.Context, name string, params interface{}, resultType interface{}) (chan interface{}, chan error)
+
+	// ExecuteToolsParallelAsync executes multiple tools on the server in parallel asynchronously.
+	// The toolCalls parameter is a map where keys are tool names and values are the parameters to pass to each tool.
+	// Returns two channels: one for results (map of tool names to results) and one for errors.
+	ExecuteToolsParallelAsync(ctx context.Context, toolCalls map[string]interface{}, resultTypes map[string]interface{}) (chan map[string]interface{}, chan error)
 
 	// GetResourcesAsync returns the list of resources provided by the server asynchronously.
 	GetResourcesAsync(ctx context.Context) (chan []spec.Resource, chan error)
