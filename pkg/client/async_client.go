@@ -1242,6 +1242,72 @@ func (c *asyncClientImpl) CreateMessageStream(ctx context.Context, request *spec
 	return c.CreateMessageStreamAsync(ctx, request)
 }
 
+// CreateMessageWithModelPreferences creates a new message with specified model preferences
+func (c *asyncClientImpl) CreateMessageWithModelPreferences(content string, modelPreferences *spec.ModelPreferences) (*spec.CreateMessageResult, error) {
+	if !c.initialized {
+		return nil, errors.New("client not initialized")
+	}
+
+	// Create a request with the specified model preferences
+	request := spec.NewCreateMessageRequestBuilder().
+		Content(content).
+		ModelPreferences(modelPreferences).
+		Build()
+
+	return c.CreateMessage(&request)
+}
+
+// CreateMessageWithModel creates a new message with a specific model hint
+func (c *asyncClientImpl) CreateMessageWithModel(content string, modelName string) (*spec.CreateMessageResult, error) {
+	if !c.initialized {
+		return nil, errors.New("client not initialized")
+	}
+
+	// Create model preferences with a single hint
+	prefs := spec.NewModelPreferencesBuilder().
+		AddHint(modelName).
+		Build()
+
+	return c.CreateMessageWithModelPreferences(content, &prefs)
+}
+
+// CreateMessageWithModelPreferencesAsync creates a new message with specified model preferences asynchronously
+func (c *asyncClientImpl) CreateMessageWithModelPreferencesAsync(ctx context.Context, content string, modelPreferences *spec.ModelPreferences) (chan *spec.CreateMessageResult, chan error) {
+	if !c.initialized {
+		resultCh := make(chan *spec.CreateMessageResult, 1)
+		errCh := make(chan error, 1)
+		errCh <- errors.New("client not initialized")
+		close(resultCh)
+		return resultCh, errCh
+	}
+
+	// Create a request with the specified model preferences
+	request := spec.NewCreateMessageRequestBuilder().
+		Content(content).
+		ModelPreferences(modelPreferences).
+		Build()
+
+	return c.CreateMessageAsync(ctx, &request)
+}
+
+// CreateMessageWithModelAsync creates a new message with a specific model hint asynchronously
+func (c *asyncClientImpl) CreateMessageWithModelAsync(ctx context.Context, content string, modelName string) (chan *spec.CreateMessageResult, chan error) {
+	if !c.initialized {
+		resultCh := make(chan *spec.CreateMessageResult, 1)
+		errCh := make(chan error, 1)
+		errCh <- errors.New("client not initialized")
+		close(resultCh)
+		return resultCh, errCh
+	}
+
+	// Create model preferences with a single hint
+	prefs := spec.NewModelPreferencesBuilder().
+		AddHint(modelName).
+		Build()
+
+	return c.CreateMessageWithModelPreferencesAsync(ctx, content, &prefs)
+}
+
 // SetLoggingLevel sets the minimum level for logs from the server.
 func (c *asyncClientImpl) SetLoggingLevel(level spec.LogLevel) error {
 	ctx, cancel := context.WithTimeout(context.Background(), c.requestTimeout)

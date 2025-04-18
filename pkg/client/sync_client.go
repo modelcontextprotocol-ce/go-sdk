@@ -838,3 +838,32 @@ func (c *syncClientImpl) Ping() error {
 
 	return c.session.SendRequest(ctx, spec.MethodPing, nil, nil)
 }
+
+// CreateMessageWithModelPreferences creates a new message with specified model preferences
+func (c *syncClientImpl) CreateMessageWithModelPreferences(content string, modelPreferences *spec.ModelPreferences) (*spec.CreateMessageResult, error) {
+	if !c.initialized {
+		return nil, errors.New("client not initialized")
+	}
+
+	// Create a request with the specified model preferences
+	request := spec.NewCreateMessageRequestBuilder().
+		Content(content).
+		ModelPreferences(modelPreferences).
+		Build()
+
+	return c.CreateMessage(&request)
+}
+
+// CreateMessageWithModel creates a new message with a specific model hint
+func (c *syncClientImpl) CreateMessageWithModel(content string, modelName string) (*spec.CreateMessageResult, error) {
+	if !c.initialized {
+		return nil, errors.New("client not initialized")
+	}
+
+	// Create model preferences with a single hint
+	prefs := spec.NewModelPreferencesBuilder().
+		AddHint(modelName).
+		Build()
+
+	return c.CreateMessageWithModelPreferences(content, &prefs)
+}

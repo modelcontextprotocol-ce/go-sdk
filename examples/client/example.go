@@ -155,6 +155,61 @@ func StreamingExample(c client.McpSyncClient) error {
 	}
 }
 
+// ModelPreferencesExample demonstrates how to use model preferences
+// when creating messages with the MCP SDK.
+func ModelPreferencesExample(client client.McpClient) {
+	fmt.Println("=== Model Preferences Example ===")
+
+	// Example 1: Use a specific model by name
+	fmt.Println("Creating a message with a specific model hint:")
+	result, err := client.CreateMessageWithModel("Generate a summary of the solar system", "gpt-4")
+	if err != nil {
+		fmt.Printf("Error creating message with specific model: %v\n", err)
+	} else {
+		fmt.Printf("Response using specific model: %s\n\n", result.Content)
+	}
+
+	// Example 2: Create advanced model preferences with multiple parameters
+	fmt.Println("Creating a message with advanced model preferences:")
+	prefs := spec.NewModelPreferencesBuilder().
+		AddHint("gpt-4-turbo").
+		AddHint("claude-3-opus").
+		CostPriority(0.2).         // Lower priority on cost (willing to use more expensive models)
+		SpeedPriority(0.5).        // Medium priority on speed
+		IntelligencePriority(0.8). // High priority on intelligence/quality
+		Build()
+
+	result, err = client.CreateMessageWithModelPreferences(
+		"Explain quantum computing in simple terms",
+		&prefs)
+	if err != nil {
+		fmt.Printf("Error creating message with advanced preferences: %v\n", err)
+	} else {
+		fmt.Printf("Response using advanced preferences: %s\n\n", result.Content)
+	}
+
+	// Example 3: Using the CreateMessageRequest builder directly
+	fmt.Println("Creating a message using the request builder:")
+	req := spec.NewCreateMessageRequestBuilder().
+		Content("Describe three benefits of renewable energy").
+		ModelPreferences(&spec.ModelPreferences{
+			Hints: []spec.ModelHint{
+				{Name: "gpt-4-turbo"},
+			},
+			SpeedPriority: 0.7, // Prioritize faster responses
+		}).
+		MaxTokens(300).   // Limit the response length
+		Temperature(0.7). // Add some creativity
+		Build()
+
+	result, err = client.CreateMessage(&req)
+	if err != nil {
+		fmt.Printf("Error creating message with request builder: %v\n", err)
+	} else {
+		fmt.Printf("Response using request builder: %s\n\n", result.Content)
+	}
+}
+
 func main() {
 	// Create a transport
 	transport := &SimpleStdioTransport{}
@@ -224,6 +279,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("Streaming example failed: %v", err)
 	}
+
+	// Demonstrate model preferences usage
+	ModelPreferencesExample(c)
 
 	// Close the client
 	err = c.Close()

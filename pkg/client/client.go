@@ -96,6 +96,12 @@ type McpClient interface {
 	// The returned channel will receive partial results as they become available.
 	CreateMessageStream(ctx context.Context, request *spec.CreateMessageRequest) (<-chan *spec.CreateMessageResult, <-chan error)
 
+	// CreateMessageWithModelPreferences creates a new message with specified model preferences
+	CreateMessageWithModelPreferences(content string, modelPreferences *spec.ModelPreferences) (*spec.CreateMessageResult, error)
+
+	// CreateMessageWithModel creates a new message with a specific model hint
+	CreateMessageWithModel(content string, modelName string) (*spec.CreateMessageResult, error)
+
 	// SetLoggingLevel sets the minimum level for logs from the server.
 	SetLoggingLevel(level spec.LogLevel) error
 
