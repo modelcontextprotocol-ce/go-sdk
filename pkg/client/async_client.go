@@ -205,6 +205,9 @@ func (c *asyncClientImpl) registerNotificationHandlers() {
 
 		return nil
 	})
+
+	// Add root change notification handler
+	c.registerRootsChangeNotificationHandler()
 }
 
 // Close closes the client and releases any resources.
@@ -1622,4 +1625,274 @@ func (c *asyncClientImpl) executeToolsParallelAsync(ctx context.Context, toolCal
 		// Context cancelled
 		return nil, ctx.Err()
 	}
+}
+
+// GetRoots returns the list of roots provided by the server.
+func (c *asyncClientImpl) GetRoots() ([]spec.Root, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), c.requestTimeout)
+	defer cancel()
+
+	resultCh, errCh := c.GetRootsAsync(ctx)
+
+	select {
+	case result := <-resultCh:
+		return result, nil
+	case err := <-errCh:
+		return nil, err
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+// GetRootsAsync returns the list of roots provided by the server asynchronously.
+func (c *asyncClientImpl) GetRootsAsync(ctx context.Context) (chan []spec.Root, chan error) {
+	resultCh := make(chan []spec.Root, 1)
+	errCh := make(chan error, 1)
+
+	if !c.initialized {
+		errCh <- errors.New("client not initialized")
+		close(resultCh)
+		return resultCh, errCh
+	}
+
+	go func() {
+		defer close(resultCh)
+		defer close(errCh)
+
+		var result spec.ListRootsResult
+		err := c.session.SendRequest(ctx, spec.MethodRootsList, nil, &result)
+		if err != nil {
+			errCh <- err
+			return
+		}
+
+		// Notify handlers about the roots
+		for _, handler := range c.features.RootsChangeHandlers {
+			handler(result.Roots)
+		}
+
+		resultCh <- result.Roots
+	}()
+
+	return resultCh, errCh
+}
+
+// CreateRoot creates a new root on the server.
+func (c *asyncClientImpl) CreateRoot(root spec.Root) (*spec.Root, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), c.requestTimeout)
+	defer cancel()
+
+	resultCh, errCh := c.CreateRootAsync(ctx, root)
+
+	select {
+	case result := <-resultCh:
+		return result, nil
+	case err := <-errCh:
+		return nil, err
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+// CreateRootAsync creates a new root on the server asynchronously.
+func (c *asyncClientImpl) CreateRootAsync(ctx context.Context, root spec.Root) (chan *spec.Root, chan error) {
+	resultCh := make(chan *spec.Root, 1)
+	errCh := make(chan error, 1)
+
+	if !c.initialized {
+		errCh <- errors.New("client not initialized")
+		close(resultCh)
+		return resultCh, errCh
+	}
+
+	util.AssertNotNil(root, "Root must not be nil")
+	util.AssertNotEmpty(root.URI, "Root URI must not be empty")
+
+	go func() {
+		defer close(resultCh)
+		defer close(errCh)
+
+		// Create request payload
+		requestParams := &spec.CreateRootRequest{
+			Root: root,
+		}
+
+		var result spec.CreateRootResult
+		err := c.session.SendRequest(ctx, spec.MethodRootsCreate, requestParams, &result)
+		if err != nil {
+			errCh <- err
+			return
+		}
+
+		// Update local cache
+		c.features.AddRoot(result.Root)
+
+		// Notify handlers about the root creation
+		if len(c.features.RootsChangeHandlers) > 0 {
+			// Get the updated list of roots
+			roots, _ := c.GetRoots()
+			if roots != nil {
+				for _, handler := range c.features.RootsChangeHandlers {
+					handler(roots)
+				}
+			}
+		}
+
+		resultCh <- &result.Root
+	}()
+
+	return resultCh, errCh
+}
+
+// UpdateRoot updates an existing root on the server.
+func (c *asyncClientImpl) UpdateRoot(root spec.Root) (*spec.Root, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), c.requestTimeout)
+	defer cancel()
+
+	resultCh, errCh := c.UpdateRootAsync(ctx, root)
+
+	select {
+	case result := <-resultCh:
+		return result, nil
+	case err := <-errCh:
+		return nil, err
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+// UpdateRootAsync updates an existing root on the server asynchronously.
+func (c *asyncClientImpl) UpdateRootAsync(ctx context.Context, root spec.Root) (chan *spec.Root, chan error) {
+	resultCh := make(chan *spec.Root, 1)
+	errCh := make(chan error, 1)
+
+	if !c.initialized {
+		errCh <- errors.New("client not initialized")
+		close(resultCh)
+		return resultCh, errCh
+	}
+
+	util.AssertNotNil(root, "Root must not be nil")
+	util.AssertNotEmpty(root.URI, "Root URI must not be empty")
+
+	go func() {
+		defer close(resultCh)
+		defer close(errCh)
+
+		// Create request payload
+		requestParams := &spec.UpdateRootRequest{
+			Root: root,
+		}
+
+		var result spec.UpdateRootResult
+		err := c.session.SendRequest(ctx, spec.MethodRootsUpdate, requestParams, &result)
+		if err != nil {
+			errCh <- err
+			return
+		}
+
+		// Update local cache
+		c.features.AddRoot(result.Root)
+
+		// Notify handlers about the root update
+		if len(c.features.RootsChangeHandlers) > 0 {
+			// Get the updated list of roots
+			roots, _ := c.GetRoots()
+			if roots != nil {
+				for _, handler := range c.features.RootsChangeHandlers {
+					handler(roots)
+				}
+			}
+		}
+
+		resultCh <- &result.Root
+	}()
+
+	return resultCh, errCh
+}
+
+// DeleteRoot deletes a root from the server.
+func (c *asyncClientImpl) DeleteRoot(uri string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), c.requestTimeout)
+	defer cancel()
+
+	errCh := c.DeleteRootAsync(ctx, uri)
+
+	select {
+	case err := <-errCh:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// DeleteRootAsync deletes a root from the server asynchronously.
+func (c *asyncClientImpl) DeleteRootAsync(ctx context.Context, uri string) chan error {
+	errCh := make(chan error, 1)
+
+	if !c.initialized {
+		errCh <- errors.New("client not initialized")
+		close(errCh)
+		return errCh
+	}
+
+	util.AssertNotEmpty(uri, "Root URI must not be empty")
+
+	go func() {
+		defer close(errCh)
+
+		// Create request payload
+		requestParams := &spec.DeleteRootRequest{
+			URI: uri,
+		}
+
+		var result spec.DeleteRootResult
+		err := c.session.SendRequest(ctx, spec.MethodRootsDelete, requestParams, &result)
+		if err != nil {
+			errCh <- err
+			return
+		}
+
+		// Remove from local cache
+		delete(c.features.Roots, uri)
+
+		// Notify handlers about the root deletion
+		if len(c.features.RootsChangeHandlers) > 0 {
+			// Get the updated list of roots
+			roots, _ := c.GetRoots()
+			if roots != nil {
+				for _, handler := range c.features.RootsChangeHandlers {
+					handler(roots)
+				}
+			}
+		}
+
+		errCh <- nil
+	}()
+
+	return errCh
+}
+
+// OnRootsChanged registers a callback to be notified when roots change.
+func (c *asyncClientImpl) OnRootsChanged(callback func([]spec.Root)) {
+	c.features.AddRootsChangeHandler(callback)
+}
+
+// Add root change notification handler
+func (c *asyncClientImpl) registerRootsChangeNotificationHandler() {
+	if c.session == nil {
+		return
+	}
+
+	// Register handler for roots list changes
+	c.session.SetNotificationHandler(spec.MethodNotificationRootsListChanged, func(ctx context.Context, params json.RawMessage) error {
+		// Refresh roots list
+		go func() {
+			roots, _ := c.GetRoots()
+			for _, handler := range c.features.RootsChangeHandlers {
+				handler(roots)
+			}
+		}()
+		return nil
+	})
 }

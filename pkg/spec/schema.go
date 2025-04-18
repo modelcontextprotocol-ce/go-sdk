@@ -74,6 +74,9 @@ const (
 
 	// Roots Methods
 	MethodRootsList                    = "roots/list"
+	MethodRootsCreate                  = "roots/create"
+	MethodRootsUpdate                  = "roots/update"
+	MethodRootsDelete                  = "roots/delete"
 	MethodNotificationRootsListChanged = "notifications/roots/list_changed"
 
 	// Sampling Methods
@@ -478,6 +481,39 @@ type Root struct {
 // ListRootsResult represents the result of listing roots
 type ListRootsResult struct {
 	Roots []Root `json:"roots"`
+}
+
+// CreateRootRequest represents a request to create a new root
+type CreateRootRequest struct {
+	BaseRequest
+	Root Root `json:"root"`
+}
+
+// CreateRootResult represents the result of creating a root
+type CreateRootResult struct {
+	Root Root `json:"root"`
+}
+
+// UpdateRootRequest represents a request to update an existing root
+type UpdateRootRequest struct {
+	BaseRequest
+	Root Root `json:"root"`
+}
+
+// UpdateRootResult represents the result of updating a root
+type UpdateRootResult struct {
+	Root Root `json:"root"`
+}
+
+// DeleteRootRequest represents a request to delete a root
+type DeleteRootRequest struct {
+	BaseRequest
+	URI string `json:"uri"`
+}
+
+// DeleteRootResult represents the result of deleting a root
+type DeleteRootResult struct {
+	Success bool `json:"success"`
 }
 
 // Annotations provides optional annotations for clients

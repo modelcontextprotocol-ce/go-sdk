@@ -35,6 +35,9 @@ type ClientFeatures struct {
 
 	// SamplingHandler processes message creation requests before they are sent.
 	SamplingHandler SamplingHandler
+
+	// RootsChangeHandlers are called when the available roots list changes.
+	RootsChangeHandlers []RootsChangeHandler
 }
 
 // ResourceChangeHandler defines a callback for a specific resource URI
@@ -42,6 +45,9 @@ type ResourceChangeHandler struct {
 	URI      string
 	Callback func([]spec.ResourceContents)
 }
+
+// RootsChangeHandler is called when the list of roots changes
+type RootsChangeHandler func([]spec.Root)
 
 // NewDefaultClientFeatures creates a new ClientFeatures instance with default settings.
 func NewDefaultClientFeatures() *ClientFeatures {
@@ -78,6 +84,7 @@ func NewDefaultClientFeatures() *ClientFeatures {
 		ResourceChangeHandlers:  []ResourceChangeHandler{},
 		PromptsChangeHandlers:   []PromptsChangeHandler{},
 		LoggingHandlers:         []LoggingHandler{},
+		RootsChangeHandlers:     []RootsChangeHandler{},
 	}
 }
 
@@ -156,6 +163,12 @@ func (f *ClientFeatures) AddLoggingHandler(handler LoggingHandler) *ClientFeatur
 	return f
 }
 
+// AddRootsChangeHandler adds a handler for root changes.
+func (f *ClientFeatures) AddRootsChangeHandler(handler RootsChangeHandler) *ClientFeatures {
+	f.RootsChangeHandlers = append(f.RootsChangeHandlers, handler)
+	return f
+}
+
 // WithSamplingHandler sets the sampling handler.
 func (f *ClientFeatures) WithSamplingHandler(handler SamplingHandler) *ClientFeatures {
 	f.SamplingHandler = handler
@@ -185,6 +198,11 @@ func (f *ClientFeatures) GetPromptsChangeHandlers() []PromptsChangeHandler {
 // GetLoggingHandlers returns the logging handlers.
 func (f *ClientFeatures) GetLoggingHandlers() []LoggingHandler {
 	return f.LoggingHandlers
+}
+
+// GetRootsChangeHandlers returns the roots change handlers.
+func (f *ClientFeatures) GetRootsChangeHandlers() []RootsChangeHandler {
+	return f.RootsChangeHandlers
 }
 
 // GetSamplingHandler returns the sampling handler.

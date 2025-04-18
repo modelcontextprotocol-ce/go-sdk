@@ -107,6 +107,21 @@ type McpClient interface {
 
 	// Ping sends a ping to the server to check connectivity.
 	Ping() error
+
+	// GetRoots returns the list of roots available on the server.
+	GetRoots() ([]spec.Root, error)
+
+	// CreateRoot creates a new root on the server.
+	CreateRoot(root spec.Root) (*spec.Root, error)
+
+	// UpdateRoot updates an existing root on the server.
+	UpdateRoot(root spec.Root) (*spec.Root, error)
+
+	// DeleteRoot deletes a root from the server.
+	DeleteRoot(uri string) error
+
+	// OnRootsChanged registers a callback to be notified when roots change.
+	OnRootsChanged(callback func([]spec.Root))
 }
 
 // McpSyncClient defines the interface for a synchronous MCP client.
@@ -180,6 +195,18 @@ type McpAsyncClient interface {
 
 	// PingAsync sends a ping to the server to check connectivity asynchronously.
 	PingAsync(ctx context.Context) chan error
+
+	// GetRootsAsync returns the list of roots available on the server asynchronously.
+	GetRootsAsync(ctx context.Context) (chan []spec.Root, chan error)
+
+	// CreateRootAsync creates a new root on the server asynchronously.
+	CreateRootAsync(ctx context.Context, root spec.Root) (chan *spec.Root, chan error)
+
+	// UpdateRootAsync updates an existing root on the server asynchronously.
+	UpdateRootAsync(ctx context.Context, root spec.Root) (chan *spec.Root, chan error)
+
+	// DeleteRootAsync deletes a root from the server asynchronously.
+	DeleteRootAsync(ctx context.Context, uri string) chan error
 }
 
 // McpClientFeatures defines optional features that can be implemented by clients.

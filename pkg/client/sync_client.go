@@ -867,3 +867,150 @@ func (c *syncClientImpl) CreateMessageWithModel(content string, modelName string
 
 	return c.CreateMessageWithModelPreferences(content, &prefs)
 }
+
+// GetRoots retrieves the list of available roots from the server
+func (c *syncClientImpl) GetRoots() ([]spec.Root, error) {
+	if !c.initialized {
+		return nil, errors.New("client not initialized")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), c.requestTimeout)
+	defer cancel()
+
+	var result spec.ListRootsResult
+	err := c.session.SendRequest(ctx, spec.MethodRootsList, nil, &result)
+	if err != nil {
+		return nil, err
+	}
+
+	// Notify handlers about the roots
+	for _, handler := range c.features.RootsChangeHandlers {
+		handler(result.Roots)
+	}
+
+	return result.Roots, nil
+}
+
+// CreateRoot creates a new root on the server
+func (c *syncClientImpl) CreateRoot(root spec.Root) (*spec.Root, error) {
+	if !c.initialized {
+		return nil, errors.New("client not initialized")
+	}
+
+	util.AssertNotNil(root, "Root must not be nil")
+	util.AssertNotEmpty(root.URI, "Root URI must not be empty")
+
+	ctx, cancel := context.WithTimeout(context.Background(), c.requestTimeout)
+	defer cancel()
+
+	// Create request payload
+	requestParams := &spec.CreateRootRequest{
+		Root: root,
+	}
+
+	var result spec.CreateRootResult
+	err := c.session.SendRequest(ctx, spec.MethodRootsCreate, requestParams, &result)
+	if err != nil {
+		return nil, err
+	}
+
+	// Update local cache
+	c.features.AddRoot(result.Root)
+
+	// Notify handlers about the root creation
+	if len(c.features.RootsChangeHandlers) > 0 {
+		// Get the updated list of roots
+		roots, _ := c.GetRoots()
+		if roots != nil {
+			for _, handler := range c.features.RootsChangeHandlers {
+				handler(roots)
+			}
+		}
+	}
+
+	return &result.Root, nil
+}
+
+// UpdateRoot updates an existing root on the server
+func (c *syncClientImpl) UpdateRoot(root spec.Root) (*spec.Root, error) {
+	if !c.initialized {
+		return nil, errors.New("client not initialized")
+	}
+
+	util.AssertNotNil(root, "Root must not be nil")
+	util.AssertNotEmpty(root.URI, "Root URI must not be empty")
+
+	ctx, cancel := context.WithTimeout(context.Background(), c.requestTimeout)
+	defer cancel()
+
+	// Create request payload
+	requestParams := &spec.UpdateRootRequest{
+		Root: root,
+	}
+
+	var result spec.UpdateRootResult
+	err := c.session.SendRequest(ctx, spec.MethodRootsUpdate, requestParams, &result)
+	if err != nil {
+		return nil, err
+	}
+
+	// Update local cache
+	c.features.AddRoot(result.Root)
+
+	// Notify handlers about the root update
+	if len(c.features.RootsChangeHandlers) > 0 {
+		// Get the updated list of roots
+		roots, _ := c.GetRoots()
+		if roots != nil {
+			for _, handler := range c.features.RootsChangeHandlers {
+				handler(roots)
+			}
+		}
+	}
+
+	return &result.Root, nil
+}
+
+// DeleteRoot deletes a root from the server
+func (c *syncClientImpl) DeleteRoot(uri string) error {
+	if !c.initialized {
+		return errors.New("client not initialized")
+	}
+
+	util.AssertNotEmpty(uri, "Root URI must not be empty")
+
+	ctx, cancel := context.WithTimeout(context.Background(), c.requestTimeout)
+	defer cancel()
+
+	// Create request payload
+	requestParams := &spec.DeleteRootRequest{
+		URI: uri,
+	}
+
+	var result spec.DeleteRootResult
+	err := c.session.SendRequest(ctx, spec.MethodRootsDelete, requestParams, &result)
+	if err != nil {
+		return err
+	}
+
+	// Remove from local cache
+	delete(c.features.Roots, uri)
+
+	// Notify handlers about the root deletion
+	if len(c.features.RootsChangeHandlers) > 0 {
+		// Get the updated list of roots
+		roots, _ := c.GetRoots()
+		if roots != nil {
+			for _, handler := range c.features.RootsChangeHandlers {
+				handler(roots)
+			}
+		}
+	}
+
+	return nil
+}
+
+// OnRootsChanged registers a callback to be notified when roots change.
+func (c *syncClientImpl) OnRootsChanged(callback func([]spec.Root)) {
+	c.features.AddRootsChangeHandler(callback)
+}

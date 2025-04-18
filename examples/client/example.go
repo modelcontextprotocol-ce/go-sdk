@@ -210,6 +210,83 @@ func ModelPreferencesExample(client client.McpClient) {
 	}
 }
 
+// RootManagementExample demonstrates how to use root management operations
+// with the MCP SDK.
+func RootManagementExample(client client.McpClient) {
+	fmt.Println("=== Root Management Example ===")
+
+	// Example 1: List all available roots
+	fmt.Println("Listing available roots:")
+	roots, err := client.GetRoots()
+	if err != nil {
+		fmt.Printf("Error getting roots: %v\n", err)
+	} else {
+		fmt.Printf("Found %d roots\n", len(roots))
+		for _, root := range roots {
+			fmt.Printf("- %s (%s)\n", root.URI, root.Name)
+		}
+	}
+
+	// Example 2: Register for root change notifications
+	client.OnRootsChanged(func(roots []spec.Root) {
+		fmt.Println("Root list changed! New roots:")
+		for _, root := range roots {
+			fmt.Printf("- %s (%s)\n", root.URI, root.Name)
+		}
+	})
+
+	// Example 3: Create a new root
+	fmt.Println("\nCreating a new root:")
+	newRoot := spec.Root{
+		URI:  "file:///home/user/documents",
+		Name: "User Documents",
+	}
+
+	createdRoot, err := client.CreateRoot(newRoot)
+	if err != nil {
+		fmt.Printf("Error creating root: %v\n", err)
+	} else {
+		fmt.Printf("Created root: %s (%s)\n", createdRoot.URI, createdRoot.Name)
+	}
+
+	// Example 4: Update an existing root
+	fmt.Println("\nUpdating a root:")
+	if createdRoot != nil {
+		updatedRootData := *createdRoot
+		updatedRootData.Name = "Updated Documents Root"
+
+		updatedRoot, err := client.UpdateRoot(updatedRootData)
+		if err != nil {
+			fmt.Printf("Error updating root: %v\n", err)
+		} else {
+			fmt.Printf("Updated root: %s (%s)\n", updatedRoot.URI, updatedRoot.Name)
+		}
+	}
+
+	// Example 5: Delete a root
+	fmt.Println("\nDeleting a root:")
+	if createdRoot != nil {
+		err := client.DeleteRoot(createdRoot.URI)
+		if err != nil {
+			fmt.Printf("Error deleting root: %v\n", err)
+		} else {
+			fmt.Printf("Successfully deleted root: %s\n", createdRoot.URI)
+		}
+	}
+
+	// Example 6: List roots again to verify changes
+	fmt.Println("\nListing roots after modifications:")
+	roots, err = client.GetRoots()
+	if err != nil {
+		fmt.Printf("Error getting roots: %v\n", err)
+	} else {
+		fmt.Printf("Found %d roots\n", len(roots))
+		for _, root := range roots {
+			fmt.Printf("- %s (%s)\n", root.URI, root.Name)
+		}
+	}
+}
+
 func main() {
 	// Create a transport
 	transport := &SimpleStdioTransport{}
@@ -282,6 +359,9 @@ func main() {
 
 	// Demonstrate model preferences usage
 	ModelPreferencesExample(c)
+
+	// Demonstrate root management usage
+	RootManagementExample(c)
 
 	// Close the client
 	err = c.Close()
