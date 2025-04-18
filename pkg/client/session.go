@@ -232,7 +232,45 @@ func (s *clientSession) RemoveNotificationHandler(method string) {
 func (s *clientSession) SetStreamingHandler(requestID string, handler func(*spec.CreateMessageResult)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	// Create the map if it doesn't exist
+	if s.streamingHandlers == nil {
+		s.streamingHandlers = make(map[string]func(*spec.CreateMessageResult))
+	}
+
+	// Register the handler for this request ID
 	s.streamingHandlers[requestID] = handler
+
+	// Register the notification handler for message stream results if not already done
+	_, exists := s.notificationHandlers[spec.MethodMessageStreamResult]
+	if !exists {
+		s.notificationHandlers[spec.MethodMessageStreamResult] = func(ctx context.Context, params json.RawMessage) error {
+			var streamResult spec.CreateMessageResult
+			if err := json.Unmarshal(params, &streamResult); err != nil {
+				return fmt.Errorf("failed to unmarshal streaming message result: %w", err)
+			}
+
+			// Get the request ID from metadata
+			var requestID string
+			if streamResult.Metadata != nil {
+				if reqID, ok := streamResult.Metadata["requestId"].(string); ok {
+					requestID = reqID
+				}
+			}
+
+			if requestID != "" {
+				s.mu.RLock()
+				handler, ok := s.streamingHandlers[requestID]
+				s.mu.RUnlock()
+
+				if ok {
+					handler(&streamResult)
+				}
+			}
+
+			return nil
+		}
+	}
 }
 
 // RemoveStreamingHandler removes a streaming handler

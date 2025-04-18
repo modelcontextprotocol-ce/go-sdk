@@ -54,11 +54,11 @@ const (
 	MethodResourcesCreate                  = "resources/create"
 	MethodResourcesUpdate                  = "resources/update"
 	MethodResourcesDelete                  = "resources/delete"
-	MethodNotificationResourcesListChanged = "notifications/resources/list_changed"
-	MethodNotificationResourceChanged      = "notifications/resources/changed"
 	MethodResourcesTemplatesList           = "resources/templates/list"
 	MethodResourcesSubscribe               = "resources/subscribe"
 	MethodResourcesUnsubscribe             = "resources/unsubscribe"
+	MethodNotificationResourcesListChanged = "notifications/resources/list_changed"
+	MethodNotificationResourceChanged      = "notifications/resources/changed"
 
 	// Prompt Methods
 	MethodPromptList                     = "prompts/list"
@@ -82,6 +82,10 @@ const (
 	// Sampling Methods
 	MethodSamplingCreateMessage       = "sampling/createMessage"
 	MethodSamplingCreateMessageStream = "sampling/createMessageStream"
+
+	// Content Methods
+	MethodContentCreateMessageStream = "content/createMessageStream"
+	MethodMessageStreamResult        = "notifications/message/stream_result"
 )
 
 // JSONRPCMessage represents a JSON-RPC message
@@ -227,10 +231,20 @@ func (b *ClientCapabilitiesBuilder) WithSamplingCapabilities(supported bool) *Cl
 	return b
 }
 
+// WithMessageCreationCapabilities sets the sampling capabilities with message creation support
+func (b *ClientCapabilitiesBuilder) WithMessageCreationCapabilities(supported bool, messageCreation bool) *ClientCapabilitiesBuilder {
+	b.cap.Sampling = &SamplingCapabilities{
+		Supported:       supported,
+		MessageCreation: messageCreation,
+	}
+	return b
+}
+
 // WithAdvancedSamplingCapabilities sets advanced sampling capabilities
-func (b *ClientCapabilitiesBuilder) WithAdvancedSamplingCapabilities(supported bool, maxTokens int, streamingSupported bool, temperatureSupport bool, supportedModels []string, contextInclusionMax int) *ClientCapabilitiesBuilder {
+func (b *ClientCapabilitiesBuilder) WithAdvancedSamplingCapabilities(supported bool, messageCreation bool, maxTokens int, streamingSupported bool, temperatureSupport bool, supportedModels []string, contextInclusionMax int) *ClientCapabilitiesBuilder {
 	b.cap.Sampling = &SamplingCapabilities{
 		Supported:           supported,
+		MessageCreation:     messageCreation,
 		MaxTokens:           maxTokens,
 		StreamingSupported:  streamingSupported,
 		TemperatureSupport:  temperatureSupport,
@@ -309,6 +323,7 @@ type RootCapabilities struct {
 // SamplingCapabilities represents the capabilities related to LLM sampling
 type SamplingCapabilities struct {
 	Supported           bool     `json:"supported"`
+	MessageCreation     bool     `json:"messageCreation,omitempty"`
 	MaxTokens           int      `json:"maxTokens,omitempty"`
 	StreamingSupported  bool     `json:"streamingSupported,omitempty"`
 	TemperatureSupport  bool     `json:"temperatureSupport,omitempty"`
@@ -323,6 +338,7 @@ type ServerCapabilities struct {
 	Prompts      *PromptCapabilities    `json:"prompts,omitempty"`
 	Resources    *ResourcesCapabilities `json:"resources,omitempty"`
 	Tools        *ToolsCapabilities     `json:"tools,omitempty"`
+	Sampling     *SamplingCapabilities  `json:"sampling,omitempty"`
 }
 
 // ServerCapabilitiesBuilder allows for fluent construction of ServerCapabilities
@@ -422,6 +438,37 @@ func (b *ServerCapabilitiesBuilder) ToolsWithAdvanced(execution bool, listChange
 		ListChanged: listChanged,
 		Streaming:   streaming,
 		Parallel:    parallel,
+	}
+	return b
+}
+
+// Sampling sets the basic sampling capabilities
+func (b *ServerCapabilitiesBuilder) Sampling(supported bool) *ServerCapabilitiesBuilder {
+	b.capabilities.Sampling = &SamplingCapabilities{
+		Supported: supported,
+	}
+	return b
+}
+
+// SamplingWithMessageCreation sets sampling capabilities with message creation support
+func (b *ServerCapabilitiesBuilder) SamplingWithMessageCreation(supported bool, messageCreation bool) *ServerCapabilitiesBuilder {
+	b.capabilities.Sampling = &SamplingCapabilities{
+		Supported:       supported,
+		MessageCreation: messageCreation,
+	}
+	return b
+}
+
+// SamplingWithAdvanced sets advanced sampling capabilities
+func (b *ServerCapabilitiesBuilder) SamplingWithAdvanced(supported bool, messageCreation bool, maxTokens int, streamingSupported bool, temperatureSupport bool, supportedModels []string, contextInclusionMax int) *ServerCapabilitiesBuilder {
+	b.capabilities.Sampling = &SamplingCapabilities{
+		Supported:           supported,
+		MessageCreation:     messageCreation,
+		MaxTokens:           maxTokens,
+		StreamingSupported:  streamingSupported,
+		TemperatureSupport:  temperatureSupport,
+		SupportedModels:     supportedModels,
+		ContextInclusionMax: contextInclusionMax,
 	}
 	return b
 }

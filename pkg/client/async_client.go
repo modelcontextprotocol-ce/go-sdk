@@ -1153,8 +1153,8 @@ func (c *asyncClientImpl) CreateMessageStreamAsync(ctx context.Context, request 
 	}
 
 	go func() {
-		defer close(resultCh)
 		defer close(errCh)
+		// Don't close resultCh here, as it might be closed by the streaming handler
 
 		// Apply sampling if a handler is configured
 		if c.asyncSamplingHandler != nil {
@@ -1165,12 +1165,15 @@ func (c *asyncClientImpl) CreateMessageStreamAsync(ctx context.Context, request 
 			select {
 			case result := <-resCh:
 				resultCh <- result
+				close(resultCh)
 				return
 			case err := <-sErrCh:
 				errCh <- err
+				close(resultCh)
 				return
 			case <-ctx.Done():
 				errCh <- ctx.Err()
+				close(resultCh)
 				return
 			}
 		}
@@ -1188,12 +1191,15 @@ func (c *asyncClientImpl) CreateMessageStreamAsync(ctx context.Context, request 
 			select {
 			case result := <-resCh:
 				resultCh <- result
+				close(resultCh)
 				return
 			case err := <-sErrCh:
 				errCh <- err
+				close(resultCh)
 				return
 			case <-ctx.Done():
 				errCh <- ctx.Err()
+				close(resultCh)
 				return
 			}
 		}
@@ -1205,16 +1211,20 @@ func (c *asyncClientImpl) CreateMessageStreamAsync(ctx context.Context, request 
 		}
 		streamingRequest.Metadata["streaming"] = true
 
-		// Register a streaming handler for this request
+		// Generate a unique request ID for this streaming session
 		requestID := util.GenerateUUID()
 		streamingRequest.Metadata["requestId"] = requestID
+
+		// Create a context with cancel for cleanup
+		streamCtx, cancelStream := context.WithCancel(ctx)
+		defer cancelStream()
 
 		// Create a message handler to process streaming results
 		handler := func(message *spec.CreateMessageResult) {
 			select {
 			case resultCh <- message:
 				// Successfully sent message
-			case <-ctx.Done():
+			case <-streamCtx.Done():
 				// Context canceled, stop processing
 				return
 			}
@@ -1224,16 +1234,34 @@ func (c *asyncClientImpl) CreateMessageStreamAsync(ctx context.Context, request 
 		c.session.SetStreamingHandler(requestID, handler)
 		defer c.session.RemoveStreamingHandler(requestID)
 
+		// Register a handler for context cancellation to clean up
+		go func() {
+			<-ctx.Done()
+			c.session.RemoveStreamingHandler(requestID)
+			close(resultCh)
+		}()
+
 		// Send the streaming request
 		var result spec.CreateMessageResult
-		err := c.session.SendRequest(ctx, spec.MethodSamplingCreateMessageStream, &streamingRequest, &result)
+		err := c.session.SendRequest(ctx, spec.MethodContentCreateMessageStream, &streamingRequest, &result)
 		if err != nil {
 			errCh <- err
+			close(resultCh)
 			return
 		}
 
-		// The initial result may also be sent here
-		resultCh <- &result
+		// The initial result may also be sent here if the server provides one immediately
+		select {
+		case resultCh <- &result:
+			// Successfully sent initial result
+		case <-ctx.Done():
+			// Context canceled while sending initial result
+			return
+		}
+
+		// Wait for context cancellation, which will happen either when the streaming is done
+		// or when the client cancels the operation
+		<-ctx.Done()
 	}()
 
 	return resultCh, errCh
