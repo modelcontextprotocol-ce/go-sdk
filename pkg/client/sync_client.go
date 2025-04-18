@@ -121,6 +121,72 @@ func (c *syncClientImpl) GetPrompt(name string, args map[string]interface{}) (*s
 	return &result, nil
 }
 
+// CreatePrompt creates a new prompt on the server.
+func (c *syncClientImpl) CreatePrompt(prompt spec.Prompt, messages []spec.PromptMessage) error {
+	if !c.initialized {
+		return errors.New("client not initialized")
+	}
+
+	util.AssertNotNil(prompt, "Prompt must not be nil")
+	util.AssertNotEmpty(prompt.Name, "Prompt name must not be empty")
+	util.AssertNotNil(messages, "Prompt messages must not be nil")
+
+	ctx, cancel := context.WithTimeout(context.Background(), c.requestTimeout)
+	defer cancel()
+
+	// Create request payload
+	requestParams := &spec.CreatePromptRequest{
+		Prompt:   prompt,
+		Messages: messages,
+	}
+
+	var result spec.CreatePromptResult
+	return c.session.SendRequest(ctx, spec.MethodPromptCreate, requestParams, &result)
+}
+
+// UpdatePrompt updates an existing prompt on the server.
+func (c *syncClientImpl) UpdatePrompt(prompt spec.Prompt, messages []spec.PromptMessage) error {
+	if !c.initialized {
+		return errors.New("client not initialized")
+	}
+
+	util.AssertNotNil(prompt, "Prompt must not be nil")
+	util.AssertNotEmpty(prompt.Name, "Prompt name must not be empty")
+	util.AssertNotNil(messages, "Prompt messages must not be nil")
+
+	ctx, cancel := context.WithTimeout(context.Background(), c.requestTimeout)
+	defer cancel()
+
+	// Create request payload
+	requestParams := &spec.UpdatePromptRequest{
+		Prompt:   prompt,
+		Messages: messages,
+	}
+
+	var result spec.UpdatePromptResult
+	return c.session.SendRequest(ctx, spec.MethodPromptUpdate, requestParams, &result)
+}
+
+// DeletePrompt deletes a prompt from the server.
+func (c *syncClientImpl) DeletePrompt(name string) error {
+	if !c.initialized {
+		return errors.New("client not initialized")
+	}
+
+	util.AssertNotEmpty(name, "Prompt name must not be empty")
+
+	ctx, cancel := context.WithTimeout(context.Background(), c.requestTimeout)
+	defer cancel()
+
+	// Create request payload
+	requestParams := &spec.DeletePromptRequest{
+		Name: name,
+	}
+
+	var result spec.DeletePromptResult
+	return c.session.SendRequest(ctx, spec.MethodPromptDelete, requestParams, &result)
+}
+
 // Close terminates the client connection and releases resources
 func (c *syncClientImpl) Close() error {
 	if c.session != nil {

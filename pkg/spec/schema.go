@@ -63,6 +63,9 @@ const (
 	// Prompt Methods
 	MethodPromptList                     = "prompts/list"
 	MethodPromptGet                      = "prompts/get"
+	MethodPromptCreate                   = "prompts/create"
+	MethodPromptUpdate                   = "prompts/update"
+	MethodPromptDelete                   = "prompts/delete"
 	MethodNotificationPromptsListChanged = "notifications/prompts/list_changed"
 
 	// Logging Methods
@@ -1465,5 +1468,40 @@ type DeleteResourceRequest struct {
 
 // DeleteResourceResult represents the result of deleting a resource
 type DeleteResourceResult struct {
+	Success bool `json:"success"`
+}
+
+// CreatePromptRequest represents a request to create a new prompt
+type CreatePromptRequest struct {
+	BaseRequest
+	Prompt   Prompt          `json:"prompt"`
+	Messages []PromptMessage `json:"messages"`
+}
+
+// CreatePromptResult represents the result of creating a prompt
+type CreatePromptResult struct {
+	Prompt Prompt `json:"prompt"`
+}
+
+// UpdatePromptRequest represents a request to update an existing prompt
+type UpdatePromptRequest struct {
+	BaseRequest
+	Prompt   Prompt          `json:"prompt"`
+	Messages []PromptMessage `json:"messages"`
+}
+
+// UpdatePromptResult represents the result of updating a prompt
+type UpdatePromptResult struct {
+	Prompt Prompt `json:"prompt"`
+}
+
+// DeletePromptRequest represents a request to delete a prompt
+type DeletePromptRequest struct {
+	BaseRequest
+	Name string `json:"name"`
+}
+
+// DeletePromptResult represents the result of deleting a prompt
+type DeletePromptResult struct {
 	Success bool `json:"success"`
 }

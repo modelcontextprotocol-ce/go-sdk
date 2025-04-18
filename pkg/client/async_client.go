@@ -941,6 +941,138 @@ func (c *asyncClientImpl) GetPromptAsync(ctx context.Context, name string, args 
 	return resultCh, errCh
 }
 
+// CreatePrompt creates a new prompt on the server.
+func (c *asyncClientImpl) CreatePrompt(prompt spec.Prompt, messages []spec.PromptMessage) error {
+	ctx, cancel := context.WithTimeout(context.Background(), c.requestTimeout)
+	defer cancel()
+
+	errCh := c.CreatePromptAsync(ctx, prompt, messages)
+
+	select {
+	case err := <-errCh:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// CreatePromptAsync creates a new prompt on the server asynchronously.
+func (c *asyncClientImpl) CreatePromptAsync(ctx context.Context, prompt spec.Prompt, messages []spec.PromptMessage) chan error {
+	errCh := make(chan error, 1)
+
+	if !c.initialized {
+		errCh <- errors.New("client not initialized")
+		close(errCh)
+		return errCh
+	}
+
+	util.AssertNotNil(prompt, "Prompt must not be nil")
+	util.AssertNotEmpty(prompt.Name, "Prompt name must not be empty")
+	util.AssertNotNil(messages, "Prompt messages must not be nil")
+
+	go func() {
+		defer close(errCh)
+
+		// Create request payload
+		requestParams := &spec.CreatePromptRequest{
+			Prompt:   prompt,
+			Messages: messages,
+		}
+
+		var result spec.CreatePromptResult
+		errCh <- c.session.SendRequest(ctx, spec.MethodPromptCreate, requestParams, &result)
+	}()
+
+	return errCh
+}
+
+// UpdatePrompt updates an existing prompt on the server.
+func (c *asyncClientImpl) UpdatePrompt(prompt spec.Prompt, messages []spec.PromptMessage) error {
+	ctx, cancel := context.WithTimeout(context.Background(), c.requestTimeout)
+	defer cancel()
+
+	errCh := c.UpdatePromptAsync(ctx, prompt, messages)
+
+	select {
+	case err := <-errCh:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// UpdatePromptAsync updates an existing prompt on the server asynchronously.
+func (c *asyncClientImpl) UpdatePromptAsync(ctx context.Context, prompt spec.Prompt, messages []spec.PromptMessage) chan error {
+	errCh := make(chan error, 1)
+
+	if !c.initialized {
+		errCh <- errors.New("client not initialized")
+		close(errCh)
+		return errCh
+	}
+
+	util.AssertNotNil(prompt, "Prompt must not be nil")
+	util.AssertNotEmpty(prompt.Name, "Prompt name must not be empty")
+	util.AssertNotNil(messages, "Prompt messages must not be nil")
+
+	go func() {
+		defer close(errCh)
+
+		// Create request payload
+		requestParams := &spec.UpdatePromptRequest{
+			Prompt:   prompt,
+			Messages: messages,
+		}
+
+		var result spec.UpdatePromptResult
+		errCh <- c.session.SendRequest(ctx, spec.MethodPromptUpdate, requestParams, &result)
+	}()
+
+	return errCh
+}
+
+// DeletePrompt deletes a prompt from the server.
+func (c *asyncClientImpl) DeletePrompt(name string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), c.requestTimeout)
+	defer cancel()
+
+	errCh := c.DeletePromptAsync(ctx, name)
+
+	select {
+	case err := <-errCh:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// DeletePromptAsync deletes a prompt from the server asynchronously.
+func (c *asyncClientImpl) DeletePromptAsync(ctx context.Context, name string) chan error {
+	errCh := make(chan error, 1)
+
+	if !c.initialized {
+		errCh <- errors.New("client not initialized")
+		close(errCh)
+		return errCh
+	}
+
+	util.AssertNotEmpty(name, "Prompt name must not be empty")
+
+	go func() {
+		defer close(errCh)
+
+		// Create request payload
+		requestParams := &spec.DeletePromptRequest{
+			Name: name,
+		}
+
+		var result spec.DeletePromptResult
+		errCh <- c.session.SendRequest(ctx, spec.MethodPromptDelete, requestParams, &result)
+	}()
+
+	return errCh
+}
+
 // CreateMessage sends a create message request to the server.
 func (c *asyncClientImpl) CreateMessage(request *spec.CreateMessageRequest) (*spec.CreateMessageResult, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), c.requestTimeout)

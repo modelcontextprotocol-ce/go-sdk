@@ -80,6 +80,15 @@ type McpClient interface {
 	// GetPrompt gets a prompt from the server with the given arguments.
 	GetPrompt(name string, args map[string]interface{}) (*spec.GetPromptResult, error)
 
+	// CreatePrompt creates a new prompt on the server.
+	CreatePrompt(prompt spec.Prompt, messages []spec.PromptMessage) error
+
+	// UpdatePrompt updates an existing prompt on the server.
+	UpdatePrompt(prompt spec.Prompt, messages []spec.PromptMessage) error
+
+	// DeletePrompt deletes a prompt from the server.
+	DeletePrompt(name string) error
+
 	// CreateMessage sends a create message request to the server.
 	CreateMessage(request *spec.CreateMessageRequest) (*spec.CreateMessageResult, error)
 
@@ -143,6 +152,15 @@ type McpAsyncClient interface {
 
 	// GetPromptAsync gets a prompt from the server with the given arguments asynchronously.
 	GetPromptAsync(ctx context.Context, name string, args map[string]interface{}) (chan *spec.GetPromptResult, chan error)
+
+	// CreatePromptAsync creates a new prompt on the server asynchronously.
+	CreatePromptAsync(ctx context.Context, prompt spec.Prompt, messages []spec.PromptMessage) chan error
+
+	// UpdatePromptAsync updates an existing prompt on the server asynchronously.
+	UpdatePromptAsync(ctx context.Context, prompt spec.Prompt, messages []spec.PromptMessage) chan error
+
+	// DeletePromptAsync deletes a prompt from the server asynchronously.
+	DeletePromptAsync(ctx context.Context, name string) chan error
 
 	// CreateMessageAsync sends a create message request to the server asynchronously.
 	CreateMessageAsync(ctx context.Context, request *spec.CreateMessageRequest) (chan *spec.CreateMessageResult, chan error)
