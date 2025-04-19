@@ -207,6 +207,18 @@ type McpAsyncClient interface {
 
 	// DeleteRootAsync deletes a root from the server asynchronously.
 	DeleteRootAsync(ctx context.Context, uri string) chan error
+
+	// CancelOperation cancels a specific operation by ID
+	CancelOperation(operationID string) bool
+
+	// CancelCreateMessage cancels an ongoing message creation operation
+	CancelCreateMessage(messageID string) bool
+
+	// CancelToolExecution cancels an ongoing tool execution operation
+	CancelToolExecution(toolID string) bool
+
+	// GetOngoingOperations returns the IDs of all ongoing operations
+	GetOngoingOperations() []string
 }
 
 // McpClientFeatures defines optional features that can be implemented by clients.

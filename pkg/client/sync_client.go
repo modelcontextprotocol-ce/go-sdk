@@ -435,31 +435,34 @@ func (c *syncClientImpl) executeToolsSequential(ctx context.Context, toolCalls m
 
 // executeToolsParallel executes tools in parallel with a limit on concurrency
 func (c *syncClientImpl) executeToolsParallel(ctx context.Context, toolCalls map[string]interface{}, results map[string]interface{}, maxConcurrent int) map[string]error {
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, maxConcurrent)
 	errorMap := make(map[string]error)
 	errorMapMutex := sync.Mutex{}
 
-	// Create a wait group to synchronize all goroutines
-	var wg sync.WaitGroup
+	// Create a context that can be cancelled if we need to abort
+	execCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
 
-	// Create a semaphore to limit concurrency
-	sem := make(chan struct{}, maxConcurrent)
-
-	// Start a goroutine for each tool
+	// Execute tools in parallel, controlling concurrency with semaphore
 	for toolName, params := range toolCalls {
-		resultPtr, exists := results[toolName]
-		if !exists {
-			errorMapMutex.Lock()
-			errorMap[toolName] = fmt.Errorf("no result pointer provided for tool %s", toolName)
-			errorMapMutex.Unlock()
-			continue
-		}
-
 		wg.Add(1)
+		resultPtr := results[toolName]
+
 		go func(name string, p interface{}, r interface{}) {
 			defer wg.Done()
 
 			// Acquire semaphore
-			sem <- struct{}{}
+			select {
+			case sem <- struct{}{}:
+				// Successfully acquired semaphore
+			case <-execCtx.Done():
+				// Context cancelled while waiting for semaphore
+				errorMapMutex.Lock()
+				errorMap[name] = execCtx.Err()
+				errorMapMutex.Unlock()
+				return
+			}
 			defer func() { <-sem }() // Release semaphore
 
 			// Execute the tool
@@ -484,7 +487,7 @@ func (c *syncClientImpl) executeToolsParallel(ctx context.Context, toolCalls map
 	case <-done:
 		// All tools completed
 		return errorMap
-	case <-ctx.Done():
+	case <-execCtx.Done():
 		// Context cancelled
 		errorMapMutex.Lock()
 		defer errorMapMutex.Unlock()
@@ -492,9 +495,13 @@ func (c *syncClientImpl) executeToolsParallel(ctx context.Context, toolCalls map
 		// Add context error for all tools that didn't complete
 		for toolName := range toolCalls {
 			if _, exists := errorMap[toolName]; !exists {
-				errorMap[toolName] = ctx.Err()
+				errorMap[toolName] = execCtx.Err()
 			}
 		}
+
+		// Ensure we cancel any ongoing operations
+		cancel()
+
 		return errorMap
 	}
 }

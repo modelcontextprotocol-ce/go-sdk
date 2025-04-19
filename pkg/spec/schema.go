@@ -22,9 +22,14 @@ const (
 
 // Additional MCP-specific error codes
 const (
-	ErrCodeTimeoutError   = -32000
+	// ErrCodeTimeoutError indicates the operation timed out
+	ErrCodeTimeoutError = -32000
+	// ErrCodeTransportError indicates a transport layer error
 	ErrCodeTransportError = -32001
-	ErrCodeSessionClosed  = -32002
+	// ErrCodeSessionClosed indicates the session was closed
+	ErrCodeSessionClosed = -32002
+	// ErrCodeOperationCancelled indicates the operation was cancelled by a client request
+	ErrCodeOperationCancelled = -32003
 )
 
 // Additional MCP server error codes
@@ -41,6 +46,7 @@ const (
 	MethodInitialize              = "initialize"
 	MethodNotificationInitialized = "notifications/initialized"
 	MethodPing                    = "ping"
+	MethodCancel                  = "cancel"
 
 	// Tool Methods
 	MethodToolsList                    = "tools/list"
@@ -156,6 +162,11 @@ func (e *McpError) IsTimeoutError() bool {
 // IsTransportError returns true if this is a transport error
 func (e *McpError) IsTransportError() bool {
 	return e != nil && e.Code == ErrCodeTransportError
+}
+
+// IsOperationCancelledError returns true if this is an operation cancelled error
+func (e *McpError) IsOperationCancelledError() bool {
+	return e != nil && e.Code == ErrCodeOperationCancelled
 }
 
 // Implementation represents information about the implementation of a client or server
@@ -1587,4 +1598,18 @@ type DeletePromptRequest struct {
 // DeletePromptResult represents the result of deleting a prompt
 type DeletePromptResult struct {
 	Success bool `json:"success"`
+}
+
+// CancelRequest represents a request to cancel an ongoing operation
+type CancelRequest struct {
+	BaseRequest
+	OperationID string                 `json:"operationId"`        // ID of the operation to cancel
+	Type        string                 `json:"type,omitempty"`     // Type of operation (e.g., "message", "tool")
+	Metadata    map[string]interface{} `json:"metadata,omitempty"` // Additional metadata for cancellation
+}
+
+// CancelResult represents the result of a cancel request
+type CancelResult struct {
+	Success bool   `json:"success"`           // Whether the operation was successfully cancelled
+	Message string `json:"message,omitempty"` // Optional message about the cancellation
 }

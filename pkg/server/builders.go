@@ -64,7 +64,7 @@ type asyncServerBuilder struct {
 	requestTimeout       time.Duration
 	features             *ServerFeatures
 	createMessageHandler AsyncCreateMessageHandler
-	toolHandlers         map[string]AsyncToolHandler
+	toolHandlers         map[string]interface{}
 	resourceHandler      AsyncResourceHandler
 	promptHandler        AsyncPromptHandler
 }
@@ -89,7 +89,7 @@ func newAsyncServerBuilder(transportProvider spec.McpServerTransportProvider) *a
 		transportProvider: transportProvider,
 		requestTimeout:    20 * time.Second, // Default timeout
 		features:          NewDefaultServerFeatures(),
-		toolHandlers:      make(map[string]AsyncToolHandler),
+		toolHandlers:      make(map[string]interface{}),
 	}
 }
 
@@ -213,7 +213,7 @@ func (b *asyncServerBuilder) WithToolHandler(name string, handler AsyncToolHandl
 	util.AssertNotNil(name, "Tool name must not be nil")
 	util.AssertNotNil(handler, "Tool handler must not be nil")
 	if b.toolHandlers == nil {
-		b.toolHandlers = make(map[string]AsyncToolHandler)
+		b.toolHandlers = make(map[string]interface{})
 	}
 	b.toolHandlers[name] = handler
 	return b

@@ -27,6 +27,7 @@ type asyncClientImpl struct {
 	asyncSamplingHandler  AsyncSamplingHandler
 	session               spec.McpClientSession
 	initialized           bool
+	cancelManager         *util.CancellationManager
 }
 
 // newAsyncClient creates a new instance of asyncClientImpl with properly initialized fields
@@ -56,7 +57,8 @@ func newAsyncClient(transport spec.McpClientTransport, config McpClientConfig, s
 				config.LoggingHandler,
 			},
 		},
-		initialized: false,
+		cancelManager: util.NewCancellationManager(),
+		initialized:   false,
 	}
 }
 
@@ -329,9 +331,20 @@ func (c *asyncClientImpl) ExecuteToolAsync(ctx context.Context, name string, par
 
 	util.AssertNotEmpty(name, "Tool name must not be empty")
 
+	// Generate a tool execution ID
+	toolID := util.GenerateUUID()
+
+	// Create a cancellable context for this operation
+	opCtx, cancel := context.WithCancel(ctx)
+
+	// Register the operation with the cancellation manager
+	operationID := fmt.Sprintf("tool-%s", toolID)
+	c.cancelManager.RegisterOperation(operationID, cancel)
+
 	go func() {
 		defer close(resultCh)
 		defer close(errCh)
+		defer c.cancelManager.Complete(operationID) // Clean up when done
 
 		// Create the request payload
 		requestParams := &spec.CallToolRequest{
@@ -339,9 +352,17 @@ func (c *asyncClientImpl) ExecuteToolAsync(ctx context.Context, name string, par
 			Arguments: util.ToMap(params),
 		}
 
+		// Add the toolID to the arguments if possible
+		args := util.ToMap(params)
+		if args == nil {
+			args = make(map[string]interface{})
+		}
+		args["_toolId"] = toolID
+		requestParams.Arguments = args
+
 		// Create a variable to hold the result
 		var callResult spec.CallToolResult
-		err := c.session.SendRequest(ctx, spec.MethodToolsCall, requestParams, &callResult)
+		err := c.session.SendRequest(opCtx, spec.MethodToolsCall, requestParams, &callResult)
 		if err != nil {
 			errCh <- err
 			return
@@ -385,6 +406,16 @@ func (c *asyncClientImpl) ExecuteToolStream(ctx context.Context, name string, pa
 		defer cancel()
 	}
 
+	// Generate a unique ID for this tool execution
+	toolID := util.GenerateUUID()
+
+	// Create a cancellable context for this operation
+	opCtx, cancel := context.WithCancel(ctx)
+
+	// Register the operation with the cancellation manager
+	operationID := fmt.Sprintf("tool-stream-%s", toolID)
+	c.cancelManager.RegisterOperation(operationID, cancel)
+
 	// Copy params and add streaming flag
 	paramsCopy := make(map[string]interface{})
 	if paramsMap := util.ToMap(params); paramsMap != nil {
@@ -393,6 +424,7 @@ func (c *asyncClientImpl) ExecuteToolStream(ctx context.Context, name string, pa
 		}
 	}
 	paramsCopy["_streaming"] = true
+	paramsCopy["_toolId"] = toolID
 
 	// Create the request payload
 	requestParams := &spec.CallToolRequest{
@@ -413,6 +445,7 @@ func (c *asyncClientImpl) ExecuteToolStream(ctx context.Context, name string, pa
 		}
 
 		if streamResult.IsFinal {
+			c.cancelManager.Complete(operationID) // Remove from tracking when done
 			close(contentCh)
 			close(errCh)
 			return
@@ -422,58 +455,64 @@ func (c *asyncClientImpl) ExecuteToolStream(ctx context.Context, name string, pa
 		if len(streamResult.Content) > 0 {
 			select {
 			case contentCh <- streamResult.Content:
-			case <-ctx.Done():
+			case <-opCtx.Done():
 				// Context cancelled
 			}
 		}
 	}
 
+	// Create a variable to hold the initial result
+	var callResult spec.CallToolResult
+	err := c.session.SendRequest(opCtx, spec.MethodToolsCall, requestParams, &callResult)
+	if err != nil {
+		errCh <- err
+		close(contentCh)
+		c.cancelManager.Complete(operationID)
+		return contentCh, errCh
+	}
+
+	// Check if streaming was initialized successfully
+	if !callResult.IsStreaming || callResult.StreamID == "" {
+		errCh <- fmt.Errorf("server does not support streaming for tool %s", name)
+		close(contentCh)
+		c.cancelManager.Complete(operationID)
+		return contentCh, errCh
+	}
+
+	// Register the streaming handler with the streamID from the result
+	c.session.RegisterStreamHandler(callResult.StreamID, streamHandler)
+
+	// Start a goroutine to handle context cancellation
 	go func() {
-		// Handle any panics
-		defer func() {
-			if r := recover(); r != nil {
-				errCh <- fmt.Errorf("panic in ExecuteToolStream: %v", r)
-				close(contentCh)
-				close(errCh)
-			}
-		}()
-
-		// Create a variable to hold the initial result
-		var callResult spec.CallToolResult
-		err := c.session.SendRequest(ctx, spec.MethodToolsCall, requestParams, &callResult)
-		if err != nil {
-			errCh <- err
-			close(contentCh)
-			return
-		}
-
-		// Check if streaming was initialized successfully
-		if !callResult.IsStreaming || callResult.StreamID == "" {
-			errCh <- fmt.Errorf("server does not support streaming for tool %s", name)
-			close(contentCh)
-			return
-		}
-
-		// Register handler for streaming notifications with this streamID
-		c.session.RegisterStreamHandler(callResult.StreamID, streamHandler)
-
-		// Return any initial content provided in the response
-		if len(callResult.Content) > 0 {
-			contentCh <- callResult.Content
-		}
-
-		// Handle context cancellation
-		<-ctx.Done()
+		<-opCtx.Done()
 		// If context is done, make sure channels are closed properly
 		select {
-		case errCh <- ctx.Err():
+		case errCh <- opCtx.Err():
 			// Error sent successfully
 		default:
 			// Channel might be closed already
 		}
 
+		// Remove the stream handler
 		c.session.UnregisterStreamHandler(callResult.StreamID)
+
+		// If this is an explicit cancellation (not just timeout), notify the server
+		if opCtx.Err() == context.Canceled {
+			cancelCtx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+			defer cancel()
+
+			// Send cancellation request to server
+			_ = c.SendCancellationAsync(cancelCtx, toolID, "tool-stream")
+		}
+
+		// Ensure operation is marked as complete in the tracker
+		c.cancelManager.Complete(operationID)
 	}()
+
+	// Send the initial content if available
+	if len(callResult.Content) > 0 {
+		contentCh <- callResult.Content
+	}
 
 	return contentCh, errCh
 }
@@ -1104,9 +1143,31 @@ func (c *asyncClientImpl) CreateMessageAsync(ctx context.Context, request *spec.
 		return resultCh, errCh
 	}
 
+	// Generate a message ID if not provided
+	messageID := util.GenerateUUID()
+	if request.Metadata != nil && request.Metadata["id"] != nil {
+		if id, ok := request.Metadata["id"].(string); ok && id != "" {
+			messageID = id
+		}
+	} else {
+		// Add message ID to metadata
+		if request.Metadata == nil {
+			request.Metadata = make(map[string]interface{})
+		}
+		request.Metadata["id"] = messageID
+	}
+
+	// Create a cancellable context for this operation
+	opCtx, cancel := context.WithCancel(ctx)
+
+	// Register the operation with the cancellation manager
+	operationID := fmt.Sprintf("message-%s", messageID)
+	c.cancelManager.RegisterOperation(operationID, cancel)
+
 	go func() {
 		defer close(resultCh)
 		defer close(errCh)
+		defer c.cancelManager.Complete(operationID) // Clean up when done
 
 		// Apply sampling if a handler is configured
 		if c.asyncSamplingHandler != nil {
@@ -1120,15 +1181,15 @@ func (c *asyncClientImpl) CreateMessageAsync(ctx context.Context, request *spec.
 			case err := <-sErrCh:
 				errCh <- err
 				return
-			case <-ctx.Done():
-				errCh <- ctx.Err()
+			case <-opCtx.Done():
+				errCh <- opCtx.Err()
 				return
 			}
 		}
 
 		// Send the request
 		var result spec.CreateMessageResult
-		err := c.session.SendRequest(ctx, spec.MethodSamplingCreateMessage, request, &result)
+		err := c.session.SendRequest(opCtx, spec.MethodSamplingCreateMessage, request, &result)
 		if err != nil {
 			errCh <- err
 			return
@@ -1152,7 +1213,29 @@ func (c *asyncClientImpl) CreateMessageStreamAsync(ctx context.Context, request 
 		return resultCh, errCh
 	}
 
+	// Generate a message ID if not provided
+	messageID := util.GenerateUUID()
+	if request.Metadata != nil && request.Metadata["id"] != nil {
+		if id, ok := request.Metadata["id"].(string); ok && id != "" {
+			messageID = id
+		}
+	} else {
+		// Add message ID to metadata
+		if request.Metadata == nil {
+			request.Metadata = make(map[string]interface{})
+		}
+		request.Metadata["id"] = messageID
+	}
+
+	// Create a cancellable context for this operation
+	opCtx, cancel := context.WithCancel(ctx)
+
+	// Register the operation with the cancellation manager
+	operationID := fmt.Sprintf("message-stream-%s", messageID)
+	c.cancelManager.RegisterOperation(operationID, cancel)
+
 	go func() {
+		defer c.cancelManager.Complete(operationID) // Clean up when done
 		defer close(errCh)
 		// Don't close resultCh here, as it might be closed by the streaming handler
 
@@ -1171,8 +1254,8 @@ func (c *asyncClientImpl) CreateMessageStreamAsync(ctx context.Context, request 
 				errCh <- err
 				close(resultCh)
 				return
-			case <-ctx.Done():
-				errCh <- ctx.Err()
+			case <-opCtx.Done():
+				errCh <- opCtx.Err()
 				close(resultCh)
 				return
 			}
@@ -1180,13 +1263,13 @@ func (c *asyncClientImpl) CreateMessageStreamAsync(ctx context.Context, request 
 
 		// Check if server supports streaming
 		supportsStreaming := false
-		if c.serverCapabilities.Tools != nil {
-			supportsStreaming = c.serverCapabilities.Tools.Streaming
+		if c.serverCapabilities.Sampling != nil {
+			supportsStreaming = c.serverCapabilities.Sampling.StreamingSupported
 		}
 
 		if !supportsStreaming {
 			// Fall back to non-streaming implementation
-			resCh, sErrCh := c.CreateMessageAsync(ctx, request)
+			resCh, sErrCh := c.CreateMessageAsync(opCtx, request)
 
 			select {
 			case result := <-resCh:
@@ -1197,8 +1280,8 @@ func (c *asyncClientImpl) CreateMessageStreamAsync(ctx context.Context, request 
 				errCh <- err
 				close(resultCh)
 				return
-			case <-ctx.Done():
-				errCh <- ctx.Err()
+			case <-opCtx.Done():
+				errCh <- opCtx.Err()
 				close(resultCh)
 				return
 			}
@@ -1210,21 +1293,18 @@ func (c *asyncClientImpl) CreateMessageStreamAsync(ctx context.Context, request 
 			streamingRequest.Metadata = make(map[string]interface{})
 		}
 		streamingRequest.Metadata["streaming"] = true
+		streamingRequest.Metadata["id"] = messageID
 
 		// Generate a unique request ID for this streaming session
-		requestID := util.GenerateUUID()
+		requestID := messageID
 		streamingRequest.Metadata["requestId"] = requestID
-
-		// Create a context with cancel for cleanup
-		streamCtx, cancelStream := context.WithCancel(ctx)
-		defer cancelStream()
 
 		// Create a message handler to process streaming results
 		handler := func(message *spec.CreateMessageResult) {
 			select {
 			case resultCh <- message:
 				// Successfully sent message
-			case <-streamCtx.Done():
+			case <-opCtx.Done():
 				// Context canceled, stop processing
 				return
 			}
@@ -1232,21 +1312,25 @@ func (c *asyncClientImpl) CreateMessageStreamAsync(ctx context.Context, request 
 
 		// Register the streaming handler
 		c.session.SetStreamingHandler(requestID, handler)
-		defer c.session.RemoveStreamingHandler(requestID)
 
-		// Register a handler for context cancellation to clean up
-		go func() {
-			<-ctx.Done()
+		// Create cleanup function that will be run when the operation is cancelled or completed
+		cleanup := func() {
 			c.session.RemoveStreamingHandler(requestID)
 			close(resultCh)
+		}
+
+		// Handle cancellation from our cancellation manager
+		go func() {
+			<-opCtx.Done()
+			cleanup()
 		}()
 
 		// Send the streaming request
 		var result spec.CreateMessageResult
-		err := c.session.SendRequest(ctx, spec.MethodContentCreateMessageStream, &streamingRequest, &result)
+		err := c.session.SendRequest(opCtx, spec.MethodSamplingCreateMessageStream, &streamingRequest, &result)
 		if err != nil {
 			errCh <- err
-			close(resultCh)
+			cleanup()
 			return
 		}
 
@@ -1254,14 +1338,15 @@ func (c *asyncClientImpl) CreateMessageStreamAsync(ctx context.Context, request 
 		select {
 		case resultCh <- &result:
 			// Successfully sent initial result
-		case <-ctx.Done():
+		case <-opCtx.Done():
 			// Context canceled while sending initial result
+			errCh <- opCtx.Err()
+			cleanup()
 			return
 		}
 
-		// Wait for context cancellation, which will happen either when the streaming is done
-		// or when the client cancels the operation
-		<-ctx.Done()
+		// Wait for either explicit cancellation or completion from server
+		<-opCtx.Done()
 	}()
 
 	return resultCh, errCh
@@ -1923,4 +2008,103 @@ func (c *asyncClientImpl) registerRootsChangeNotificationHandler() {
 		}()
 		return nil
 	})
+}
+
+// CancelOperation cancels a specific operation by ID
+func (c *asyncClientImpl) CancelOperation(operationID string) bool {
+	return c.cancelManager.CancelOperation(operationID)
+}
+
+// CancelCreateMessage cancels an ongoing message creation operation
+func (c *asyncClientImpl) CancelCreateMessage(messageID string) bool {
+	// Format the operation ID for message creation operations
+	operationID := fmt.Sprintf("message-%s", messageID)
+
+	// First cancel locally
+	localCancelled := c.cancelManager.CancelOperation(operationID)
+
+	// Also notify the server about the cancellation
+	ctx, cancel := context.WithTimeout(context.Background(), c.requestTimeout)
+	defer cancel()
+
+	errCh := c.SendCancellationAsync(ctx, messageID, "message")
+
+	// Wait for server response but don't block too long
+	select {
+	case <-errCh:
+		// We don't care about the error here; the local cancellation is what matters
+		break
+	case <-time.After(500 * time.Millisecond):
+		// Don't wait too long for server response
+		break
+	}
+
+	return localCancelled
+}
+
+// CancelToolExecution cancels an ongoing tool execution operation
+func (c *asyncClientImpl) CancelToolExecution(toolID string) bool {
+	// Format the operation ID for tool execution operations
+	operationID := fmt.Sprintf("tool-%s", toolID)
+
+	// First cancel locally
+	localCancelled := c.cancelManager.CancelOperation(operationID)
+
+	// Also notify the server about the cancellation
+	ctx, cancel := context.WithTimeout(context.Background(), c.requestTimeout)
+	defer cancel()
+
+	errCh := c.SendCancellationAsync(ctx, toolID, "tool")
+
+	// Wait for server response but don't block too long
+	select {
+	case <-errCh:
+		// We don't care about the error here; the local cancellation is what matters
+		break
+	case <-time.After(500 * time.Millisecond):
+		// Don't wait too long for server response
+		break
+	}
+
+	return localCancelled
+}
+
+// GetOngoingOperations returns the IDs of all ongoing operations
+func (c *asyncClientImpl) GetOngoingOperations() []string {
+	return c.cancelManager.GetOperationIDs()
+}
+
+// SendCancellationAsync explicitly notifies the server that an operation should be cancelled
+func (c *asyncClientImpl) SendCancellationAsync(ctx context.Context, operationID string, operationType string) chan error {
+	errCh := make(chan error, 1)
+
+	if !c.initialized {
+		errCh <- errors.New("client not initialized")
+		close(errCh)
+		return errCh
+	}
+
+	go func() {
+		defer close(errCh)
+
+		// Create request payload
+		requestParams := &spec.CancelRequest{
+			OperationID: operationID,
+			Type:        operationType,
+		}
+
+		var result spec.CancelResult
+		err := c.session.SendRequest(ctx, spec.MethodCancel, requestParams, &result)
+		if err != nil {
+			errCh <- err
+			return
+		}
+
+		if !result.Success {
+			errCh <- fmt.Errorf("failed to cancel operation: %s", result.Message)
+			return
+		}
+	}()
+
+	return errCh
 }

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -18,8 +19,8 @@ type asyncServerImpl struct {
 	transportProvider    spec.McpServerTransportProvider
 	transport            spec.McpServerTransport
 	features             *ServerFeatures
-	createMessageHandler AsyncCreateMessageHandler
-	toolHandlers         map[string]AsyncToolHandler
+	createMessageHandler interface{}
+	toolHandlers         map[string]interface{}
 	resourceHandler      AsyncResourceHandler
 	promptHandler        AsyncPromptHandler
 	mu                   sync.RWMutex
@@ -27,6 +28,7 @@ type asyncServerImpl struct {
 	clients              map[string]spec.McpClientSession
 	clientsMu            sync.RWMutex
 	requestTimeout       time.Duration
+	activeOperations     map[string]context.CancelFunc
 }
 
 // AsyncServerExchange represents an asynchronous server exchange
@@ -355,7 +357,7 @@ func (s *asyncServerImpl) RegisterToolHandler(name string, handler AsyncToolHand
 	defer s.mu.Unlock()
 
 	if s.toolHandlers == nil {
-		s.toolHandlers = make(map[string]AsyncToolHandler)
+		s.toolHandlers = make(map[string]interface{})
 	}
 	s.toolHandlers[name] = handler
 	return nil
@@ -565,6 +567,8 @@ func (s *asyncServerImpl) processMessage(msg interface{}, session spec.McpClient
 		s.handlePromptRequest(request, session)
 	case *spec.CloseSessionRequest:
 		s.handleCloseSessionRequest(request, session)
+	case *spec.CancelRequest:
+		s.handleCancelRequest(request, session)
 	default:
 		// Unknown message type
 		errMsg := fmt.Sprintf("unsupported message type: %T", msg)
@@ -602,9 +606,31 @@ func (s *asyncServerImpl) handleContentRequest(request *spec.ContentRequest, ses
 
 	exchange := NewDefaultAsyncServerExchange(request, responseSender, contentPublisher)
 
-	// Create a context with timeout
+	// Create a context with timeout and store it for potential cancellation
 	ctx, cancel := context.WithTimeout(context.Background(), s.requestTimeout)
-	defer cancel()
+
+	// Store the cancel function in server to allow explicit cancellation
+	// This maps request ID to a cancel function to enable explicit cancellation
+	operationID := request.RequestID
+	if operationID == "" {
+		operationID = uuid.New().String()
+	}
+
+	// Register this operation in a registry of active operations
+	s.mu.Lock()
+	if s.activeOperations == nil {
+		s.activeOperations = make(map[string]context.CancelFunc)
+	}
+	s.activeOperations[operationID] = cancel
+	s.mu.Unlock()
+
+	// Ensure cleanup when done
+	defer func() {
+		s.mu.Lock()
+		delete(s.activeOperations, operationID)
+		s.mu.Unlock()
+		cancel() // Ensure context is cancelled when done
+	}()
 
 	// Handle the request asynchronously
 	go func() {
@@ -616,19 +642,21 @@ func (s *asyncServerImpl) handleContentRequest(request *spec.ContentRequest, ses
 		}()
 
 		// Create a proper CreateMessageRequest from the ContentRequest
-		// ContentRequest might contain different fields, so we map what makes sense
-		// for a CreateMessageRequest
-		createMsgReq := spec.CreateMessageRequest{
-			// Map the request ID
-			// Messages are handled via the content publisher if streaming is supported
-			Metadata: map[string]interface{}{
-				"requestId": request.RequestID,
-			},
+		createMsgReq := spec.NewCreateMessageRequestBuilder().Metadata(map[string]interface{}{
+			"requestId":   request.RequestID,
+			"operationId": operationID,
+		}).Content(request.SystemPrompt).Build()
+
+		// Pass along any provided metadata from the request
+		if request.Metadata != nil {
+			for k, v := range request.Metadata {
+				createMsgReq.Metadata[k] = v
+			}
 		}
 
-		resultCh, errCh := s.createMessageHandler(ctx, createMsgReq)
+		resultCh, errCh := s.createMessageHandler.(AsyncCreateMessageHandler)(ctx, createMsgReq)
 
-		// Handle the result or error
+		// Handle the result or error with cancellation support
 		select {
 		case response := <-resultCh:
 			if response != nil {
@@ -639,7 +667,19 @@ func (s *asyncServerImpl) handleContentRequest(request *spec.ContentRequest, ses
 		case err := <-errCh:
 			_ = exchange.SendError(err)
 		case <-ctx.Done():
-			_ = exchange.SendError(ctx.Err())
+			if ctx.Err() == context.Canceled {
+				// This was an explicit cancellation
+				_ = exchange.SendError(&spec.McpError{
+					Code:    spec.ErrCodeOperationCancelled,
+					Message: "Operation was cancelled by client request",
+				})
+			} else {
+				// This was a timeout
+				_ = exchange.SendError(&spec.McpError{
+					Code:    spec.ErrCodeTimeoutError,
+					Message: "Operation timed out",
+				})
+			}
 		}
 	}()
 }
@@ -669,9 +709,30 @@ func (s *asyncServerImpl) handleToolExecutionRequest(request *spec.ToolExecution
 
 	exchange := NewDefaultAsyncServerExchange(request, responseSender, contentPublisher)
 
-	// Create a context with timeout
+	// Create a context with timeout and store it for potential cancellation
 	ctx, cancel := context.WithTimeout(context.Background(), s.requestTimeout)
-	defer cancel()
+
+	// Generate an operation ID for this tool execution if not provided
+	operationID := request.ToolID
+	if operationID == "" {
+		operationID = fmt.Sprintf("tool-%s", uuid.New().String())
+	}
+
+	// Register this operation in a registry of active operations
+	s.mu.Lock()
+	if s.activeOperations == nil {
+		s.activeOperations = make(map[string]context.CancelFunc)
+	}
+	s.activeOperations[operationID] = cancel
+	s.mu.Unlock()
+
+	// Ensure cleanup when done
+	defer func() {
+		s.mu.Lock()
+		delete(s.activeOperations, operationID)
+		s.mu.Unlock()
+		cancel() // Ensure context is cancelled when done
+	}()
 
 	// Handle the request asynchronously
 	go func() {
@@ -690,7 +751,7 @@ func (s *asyncServerImpl) handleToolExecutionRequest(request *spec.ToolExecution
 		}
 
 		// Call the async tool handler and handle the results
-		resultCh, errCh := handler(ctx, paramsJSON)
+		resultCh, errCh := handler.(AsyncToolHandler)(ctx, paramsJSON)
 
 		// Process the result or error
 		select {
@@ -711,7 +772,19 @@ func (s *asyncServerImpl) handleToolExecutionRequest(request *spec.ToolExecution
 		case err := <-errCh:
 			_ = exchange.SendError(err)
 		case <-ctx.Done():
-			_ = exchange.SendError(ctx.Err())
+			if ctx.Err() == context.Canceled {
+				// This was an explicit cancellation
+				_ = exchange.SendError(&spec.McpError{
+					Code:    spec.ErrCodeOperationCancelled,
+					Message: "Tool execution was cancelled by client request",
+				})
+			} else {
+				// This was a timeout
+				_ = exchange.SendError(&spec.McpError{
+					Code:    spec.ErrCodeTimeoutError,
+					Message: "Tool execution timed out",
+				})
+			}
 		}
 	}()
 }
@@ -882,6 +955,98 @@ func (s *asyncServerImpl) handleCloseSessionRequest(_ *spec.CloseSessionRequest,
 	// Unregister and close the session
 	s.unregisterClientSession(session)
 	_ = session.Close()
+}
+
+// handleCancelRequest handles a request to cancel an ongoing operation
+func (s *asyncServerImpl) handleCancelRequest(request *spec.CancelRequest, session spec.McpClientSession) {
+	// Create the response object
+	response := &spec.CancelResult{
+		Success: false,
+		Message: "Operation not found or already completed",
+	}
+
+	// First try direct cancellation using our operation registry
+	s.mu.Lock()
+	if cancelFunc, exists := s.activeOperations[request.OperationID]; exists {
+		// Found the operation, cancel it directly
+		cancelFunc()                                    // This will cause the context to be cancelled
+		delete(s.activeOperations, request.OperationID) // Clean up the map
+		response.Success = true
+		response.Message = "Operation cancelled successfully"
+		s.mu.Unlock()
+		_ = session.SendMessage(response)
+		return
+	}
+	s.mu.Unlock()
+
+	// If no direct match, try the specialized cancellation interfaces
+	switch request.Type {
+	case "message", "message-stream":
+		// Cancel any ongoing message creation operations with the given ID
+		if s.createMessageHandler != nil {
+			// If we have a handler that supports cancellation, try to cancel the operation
+			if canceller, ok := s.createMessageHandler.(interface {
+				CancelMessageCreation(operationID string) bool
+			}); ok {
+				if canceller.CancelMessageCreation(request.OperationID) {
+					response.Success = true
+					response.Message = "Message creation operation cancelled"
+				}
+			}
+		}
+	case "tool":
+		// Cancel any ongoing tool execution operations with the given ID
+		if toolID := extractToolID(request.OperationID); toolID != "" {
+			if handler, exists := s.toolHandlers[toolID]; exists {
+				// If the tool handler supports cancellation, use it
+				if canceller, ok := handler.(interface {
+					CancelExecution(operationID string) bool
+				}); ok {
+					if canceller.CancelExecution(request.OperationID) {
+						response.Success = true
+						response.Message = "Tool execution operation cancelled"
+					}
+				}
+			}
+		}
+	default:
+		// For other operation types or if no type is specified,
+		// check with any handlers that implement the CancelOperation interface
+		if s.createMessageHandler != nil {
+			if canceller, ok := s.createMessageHandler.(interface {
+				CancelOperation(operationID string) bool
+			}); ok {
+				if canceller.CancelOperation(request.OperationID) {
+					response.Success = true
+					response.Message = "Operation cancelled"
+				}
+			}
+		}
+
+		// Check tool handlers that might implement generic cancellation
+		for _, handler := range s.toolHandlers {
+			if canceller, ok := handler.(interface {
+				CancelOperation(operationID string) bool
+			}); ok {
+				if canceller.CancelOperation(request.OperationID) {
+					response.Success = true
+					response.Message = "Operation cancelled"
+					break
+				}
+			}
+		}
+	}
+
+	// Send the response
+	_ = session.SendMessage(response)
+}
+
+// extractToolID extracts the tool ID from an operation ID formatted as "tool-{toolID}"
+func extractToolID(operationID string) string {
+	if strings.HasPrefix(operationID, "tool-") {
+		return strings.TrimPrefix(operationID, "tool-")
+	}
+	return ""
 }
 
 // defaultResponseSender implements ResponseSender
