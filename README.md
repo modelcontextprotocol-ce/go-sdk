@@ -19,15 +19,15 @@ The Model Context Protocol enables AI models to interact with external environme
 ### Installation
 
 ```bash
-go get github.com/modelcontextprotocol/go-sdk
+go get github.com/modelcontextprotocol-ce/go-sdk
 ```
 
 ### Client Example
 
 ```go
 import (
-    "github.com/modelcontextprotocol/go-sdk/pkg/client"
-    "github.com/modelcontextprotocol/go-sdk/pkg/spec"
+    "github.com/modelcontextprotocol-ce/go-sdk/pkg/client"
+    "github.com/modelcontextprotocol-ce/go-sdk/pkg/spec"
 )
 
 func main() {
@@ -71,8 +71,8 @@ func main() {
 
 ```go
 import (
-    "github.com/modelcontextprotocol/go-sdk/pkg/server"
-    "github.com/modelcontextprotocol/go-sdk/pkg/spec"
+    "github.com/modelcontextprotocol-ce/go-sdk/pkg/server"
+    "github.com/modelcontextprotocol-ce/go-sdk/pkg/spec"
 )
 
 // Tool handler function
