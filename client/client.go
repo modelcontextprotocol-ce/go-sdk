@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/modelcontextprotocol-ce/go-sdk/pkg/spec"
+	"github.com/modelcontextprotocol-ce/go-sdk/spec"
 )
 
 // McpClient defines the common interface for MCP clients.

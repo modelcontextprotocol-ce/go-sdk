@@ -7,8 +7,8 @@ import (
 	"log"
 	"time"
 
-	"github.com/modelcontextprotocol-ce/go-sdk/pkg/client"
-	"github.com/modelcontextprotocol-ce/go-sdk/pkg/spec"
+	"github.com/modelcontextprotocol-ce/go-sdk/client"
+	"github.com/modelcontextprotocol-ce/go-sdk/spec"
 )
 
 // SimpleStdioTransport is a simple implementation of the McpClientTransport interface

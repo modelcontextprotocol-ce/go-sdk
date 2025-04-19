@@ -9,9 +9,9 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/modelcontextprotocol-ce/go-sdk/pkg/client"
-	"github.com/modelcontextprotocol-ce/go-sdk/pkg/client/stream"
-	"github.com/modelcontextprotocol-ce/go-sdk/pkg/spec"
+	"github.com/modelcontextprotocol-ce/go-sdk/client"
+	"github.com/modelcontextprotocol-ce/go-sdk/client/stream"
+	"github.com/modelcontextprotocol-ce/go-sdk/spec"
 )
 
 // HttpStreamingTransport extends the base StreamingTransport to use HTTP for communication

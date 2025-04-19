@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/modelcontextprotocol-ce/go-sdk/pkg/spec"
+	"github.com/modelcontextprotocol-ce/go-sdk/spec"
 )
 
 // McpServer defines the common interface for all MCP servers.

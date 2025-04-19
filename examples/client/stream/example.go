@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/modelcontextprotocol-ce/go-sdk/pkg/client"
-	"github.com/modelcontextprotocol-ce/go-sdk/pkg/spec"
+	"github.com/modelcontextprotocol-ce/go-sdk/client"
+	"github.com/modelcontextprotocol-ce/go-sdk/spec"
 )
 
 // StreamingTransport is a new implementation of the McpClientTransport
