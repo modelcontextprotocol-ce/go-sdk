@@ -9,8 +9,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/modelcontextprotocol/go-sdk/pkg/spec"
-	"github.com/modelcontextprotocol/go-sdk/pkg/util"
+	"github.com/modelcontextprotocol-ce/go-sdk/pkg/spec"
+	"github.com/modelcontextprotocol-ce/go-sdk/pkg/util"
 )
 
 // asyncClientImpl implements the McpAsyncClient interface

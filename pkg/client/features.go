@@ -2,7 +2,7 @@
 package client
 
 import (
-	"github.com/modelcontextprotocol/go-sdk/pkg/spec"
+	"github.com/modelcontextprotocol-ce/go-sdk/pkg/spec"
 )
 
 // ClientFeatures encapsulates the feature set and capabilities of an MCP client.

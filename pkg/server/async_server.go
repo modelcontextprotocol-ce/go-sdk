@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/modelcontextprotocol/go-sdk/pkg/spec"
-	"github.com/modelcontextprotocol/go-sdk/pkg/util"
+	"github.com/modelcontextprotocol-ce/go-sdk/pkg/spec"
+	"github.com/modelcontextprotocol-ce/go-sdk/pkg/util"
 )
 
 // asyncServerImpl implements the McpAsyncServer interface

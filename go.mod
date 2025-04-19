@@ -1,4 +1,4 @@
-module github.com/modelcontextprotocol/go-sdk
+module github.com/modelcontextprotocol-ce/go-sdk
 
 go 1.19
 
