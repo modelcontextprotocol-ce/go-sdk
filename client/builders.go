@@ -3,7 +3,7 @@ package client
 import (
 	"time"
 
-	"github.com/modelcontextprotocol-ce/go-sdk/pkg/spec"
+	"github.com/modelcontextprotocol-ce/go-sdk/spec"
 )
 
 // McpClientConfig holds the configuration for an MCP client

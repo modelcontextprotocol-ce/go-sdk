@@ -26,8 +26,8 @@ go get github.com/modelcontextprotocol-ce/go-sdk
 
 ```go
 import (
-    "github.com/modelcontextprotocol-ce/go-sdk/pkg/client"
-    "github.com/modelcontextprotocol-ce/go-sdk/pkg/spec"
+    "github.com/modelcontextprotocol-ce/go-sdk/client"
+    "github.com/modelcontextprotocol-ce/go-sdk/spec"
 )
 
 func main() {
@@ -71,8 +71,8 @@ func main() {
 
 ```go
 import (
-    "github.com/modelcontextprotocol-ce/go-sdk/pkg/server"
-    "github.com/modelcontextprotocol-ce/go-sdk/pkg/spec"
+    "github.com/modelcontextprotocol-ce/go-sdk/server"
+    "github.com/modelcontextprotocol-ce/go-sdk/spec"
 )
 
 // Tool handler function

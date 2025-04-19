@@ -3,8 +3,8 @@ package server
 import (
 	"time"
 
-	"github.com/modelcontextprotocol-ce/go-sdk/pkg/spec"
-	"github.com/modelcontextprotocol-ce/go-sdk/pkg/util"
+	"github.com/modelcontextprotocol-ce/go-sdk/spec"
+	"github.com/modelcontextprotocol-ce/go-sdk/util"
 )
 
 // Builder interface for creating servers

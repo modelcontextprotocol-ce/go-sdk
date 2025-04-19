@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/modelcontextprotocol-ce/go-sdk/pkg/spec"
-	"github.com/modelcontextprotocol-ce/go-sdk/pkg/util"
+	"github.com/modelcontextprotocol-ce/go-sdk/spec"
+	"github.com/modelcontextprotocol-ce/go-sdk/util"
 )
 
 // syncClientImpl implements the McpSyncClient interface

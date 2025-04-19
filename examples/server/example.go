@@ -7,8 +7,8 @@ import (
 	"log"
 	"time"
 
-	"github.com/modelcontextprotocol-ce/go-sdk/pkg/server"
-	"github.com/modelcontextprotocol-ce/go-sdk/pkg/spec"
+	"github.com/modelcontextprotocol-ce/go-sdk/server"
+	"github.com/modelcontextprotocol-ce/go-sdk/spec"
 )
 
 // SimpleServerTransport is a simple implementation of the McpServerTransport interface
