@@ -15,6 +15,9 @@ type Builder interface {
 	// WithServerInfo sets the server implementation information.
 	WithServerInfo(serverInfo spec.Implementation) Builder
 
+	// WithCapabilities sets the server capabilities.
+	WithCapabilities(capabilities spec.ServerCapabilities) Builder
+
 	// WithTools sets the tools available on the server.
 	WithTools(tools ...spec.Tool) Builder
 
@@ -107,6 +110,13 @@ func (b *syncServerBuilder) WithServerInfo(serverInfo spec.Implementation) Build
 	return b
 }
 
+// WithCapabilities sets the server capabilities
+func (b *syncServerBuilder) WithCapabilities(capabilities spec.ServerCapabilities) Builder {
+	util.AssertNotNil(capabilities, "Server capabilities must not be nil")
+	b.features.ServerCapabilities = capabilities
+	return b
+}
+
 // WithTools sets the tools available on the server
 func (b *syncServerBuilder) WithTools(tools ...spec.Tool) Builder {
 	util.AssertNotNil(tools, "Tools must not be nil")
@@ -184,6 +194,13 @@ func (b *asyncServerBuilder) WithRequestTimeout(timeout time.Duration) Builder {
 func (b *asyncServerBuilder) WithServerInfo(serverInfo spec.Implementation) Builder {
 	util.AssertNotNil(serverInfo, "Server info must not be nil")
 	b.features.ServerInfo = serverInfo
+	return b
+}
+
+// WithCapabilities sets the server capabilities
+func (b *asyncServerBuilder) WithCapabilities(capabilities spec.ServerCapabilities) Builder {
+	util.AssertNotNil(capabilities, "Server capabilities must not be nil")
+	b.features.ServerCapabilities = capabilities
 	return b
 }
 
