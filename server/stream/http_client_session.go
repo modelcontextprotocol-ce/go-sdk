@@ -3,8 +3,10 @@ package stream
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"sync"
 	"time"
 
@@ -20,6 +22,7 @@ type httpClientSession struct {
 	notificationHandlers map[string]spec.NotificationHandler
 	streamingHandlers    map[string]func(*spec.CreateMessageResult)
 	metadata             map[string]interface{}
+	w                    http.ResponseWriter
 	mu                   sync.RWMutex
 }
 
@@ -66,6 +69,31 @@ func (s *httpClientSession) SendRequest(ctx context.Context, method string, para
 	// For the HTTP transport, this is not directly used as requests are handled through HTTP
 	// This is a placeholder implementation to satisfy the interface
 	return errors.New("SendRequest not supported in HTTP server transport")
+}
+
+// Respond sends a response to the client for a specific event
+func (s *httpClientSession) Respond(ctx context.Context, event string, message interface{}) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var body []byte
+	if b, ok := message.([]byte); ok {
+		body = b
+	} else if msg, ok := message.(string); ok {
+		body = []byte(msg)
+	} else {
+		body, _ = json.Marshal(message)
+	}
+
+	fmt.Fprintf(s.w, "event: %s\ndata: %s\n\n", event, body)
+
+	// Create a flusher for streaming
+	flusher, ok := s.w.(http.Flusher)
+	if ok {
+		flusher.Flush()
+	}
+
+	return nil
 }
 
 // SendMessage sends a JSON-RPC message directly
@@ -190,13 +218,14 @@ func (s *httpClientSession) GetSubscriptions() []string {
 }
 
 // createClientSession creates a new client session with the given ID
-func createClientSession(sessionID string) *httpClientSession {
+func createClientSession(sessionID string, w http.ResponseWriter) *httpClientSession {
 	return &httpClientSession{
 		id:                   sessionID,
 		lastActive:           time.Now(),
 		subscriptions:        make(map[string]bool),
 		notificationHandlers: make(map[string]spec.NotificationHandler),
 		streamingHandlers:    make(map[string]func(*spec.CreateMessageResult)),
+		w:                    w,
 		metadata:             make(map[string]interface{}),
 	}
 }

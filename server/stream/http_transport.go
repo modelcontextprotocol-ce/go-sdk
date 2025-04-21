@@ -260,7 +260,7 @@ func (t *HTTPServerTransport) handleJSONRPC(w http.ResponseWriter, r *http.Reque
 	sessionID := t.getOrCreateSessionID(r)
 
 	// Get or create session
-	session := t.getOrCreateSession(sessionID)
+	session := t.getOrCreateSession(sessionID, w)
 
 	// Process the request based on method
 	response, err := t.processJSONRPCRequest(r.Context(), &message, session)
@@ -378,18 +378,11 @@ func (t *HTTPServerTransport) handleDefaultSSE(w http.ResponseWriter, r *http.Re
 	// Create a notification channel for connection closure
 	notify := r.Context().Done()
 
-	// Create a flusher for streaming
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		http.Error(w, "Streaming not supported", http.StatusInternalServerError)
-		return
-	}
-
 	// Extract or create a session ID
 	sessionID := t.getOrCreateSessionID(r)
 
 	// Get or create session
-	session := t.getOrCreateSession(sessionID)
+	session := t.getOrCreateSession(sessionID, w)
 
 	// Update session metadata
 	session.mu.Lock()
@@ -407,17 +400,7 @@ func (t *HTTPServerTransport) handleDefaultSSE(w http.ResponseWriter, r *http.Re
 	defer ticker.Stop()
 
 	// Send initial endpoint message - this is what VS Code MCP clients expect
-	endpointInfo := map[string]interface{}{
-		"type":      "endpoint",
-		"url":       "/jsonrpc",
-		"sessionId": sessionID,
-		"time":      time.Now().Format(time.RFC3339),
-		"version":   spec.LatestProtocolVersion,
-	}
-
-	initialData, _ := json.Marshal(endpointInfo)
-	fmt.Fprintf(w, "event: endpoint\ndata: %s\n\n", initialData)
-	flusher.Flush()
+	session.Respond(r.Context(), "endpoint", "/jsonrpc")
 
 	// Stream ping messages until the client disconnects
 	for {
@@ -431,24 +414,7 @@ func (t *HTTPServerTransport) handleDefaultSSE(w http.ResponseWriter, r *http.Re
 
 		case <-ticker.C:
 			// Send an endpoint message with server info
-			pingData := map[string]interface{}{
-				"type":      "endpoint",
-				"url":       "/jsonrpc",
-				"sessionId": sessionID,
-				"time":      time.Now().Format(time.RFC3339),
-			}
-
-			data, err := json.Marshal(pingData)
-			if err != nil {
-				if t.debug {
-					log.Printf("ERROR: Failed to marshal endpoint data: %v", err)
-				}
-				continue
-			}
-
-			// Send the endpoint event
-			fmt.Fprintf(w, "event: endpoint\ndata: %s\n\n", data)
-			flusher.Flush()
+			session.Respond(context.Background(), "endpoint", "/jsonrpc")
 
 			// Update session last active time
 			session.lastActive = time.Now()
@@ -1130,13 +1096,13 @@ func (t *HTTPServerTransport) getOrCreateSessionID(r *http.Request) string {
 }
 
 // getOrCreateSession gets or creates a client session
-func (t *HTTPServerTransport) getOrCreateSession(sessionID string) *httpClientSession {
+func (t *HTTPServerTransport) getOrCreateSession(sessionID string, w http.ResponseWriter) *httpClientSession {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
 	session, exists := t.sessions[sessionID]
 	if !exists {
-		session = createClientSession(sessionID)
+		session = createClientSession(sessionID, w)
 		t.sessions[sessionID] = session
 	}
 

@@ -49,82 +49,12 @@ type McpServer interface {
 // It provides blocking methods for handling MCP requests.
 type McpSyncServer interface {
 	McpServer
-
-	// RegisterToolHandler registers a handler for a specific tool.
-	// The handler will be called when a client requests to execute the tool.
-	RegisterToolHandler(name string, handler ToolHandler) error
-
-	// RegisterStreamingToolHandler registers a handler for a specific tool that supports streaming results.
-	// The handler will be called when a client requests to execute the tool with streaming support.
-	RegisterStreamingToolHandler(name string, handler StreamingToolHandler) error
-
-	// RegisterStreamToolHandler registers a handler for a specific tool that supports streaming results.
-	// This is an alias for RegisterStreamingToolHandler to conform with MCP specification naming.
-	RegisterStreamToolHandler(name string, handler StreamingToolHandler) error
-
-	// RegisterResourceHandler registers a handler for accessing resources.
-	RegisterResourceHandler(handler ResourceHandler) error
-
-	// RegisterPromptHandler registers a handler for applying prompt templates.
-	RegisterPromptHandler(handler PromptHandler) error
-
-	// SetCreateMessageHandler sets the handler for creating messages.
-	SetCreateMessageHandler(handler CreateMessageHandler) error
-
-	// AddTool adds a tool to the list of available tools.
-	AddTool(tool spec.Tool) error
-
-	// AddResource adds a resource to the list of available resources.
-	AddResource(resource spec.Resource) error
-
-	// AddPrompt adds a prompt to the list of available prompts.
-	AddPrompt(prompt spec.Prompt) error
-
-	// RemoveTool removes a tool from the list of available tools.
-	RemoveTool(name string) error
-
-	// RemoveResource removes a resource from the list of available resources.
-	RemoveResource(uri string) error
-
-	// RemovePrompt removes a prompt from the list of available prompts.
-	RemovePrompt(name string) error
 }
 
 // McpAsyncServer defines an asynchronous MCP server interface.
 // It provides non-blocking methods for handling MCP requests.
 type McpAsyncServer interface {
 	McpServer
-
-	// RegisterToolHandler registers a handler for a specific tool.
-	// The handler will be called when a client requests to execute the tool.
-	RegisterToolHandler(name string, handler AsyncToolHandler) error
-
-	// RegisterResourceHandler registers a handler for accessing resources.
-	RegisterResourceHandler(handler AsyncResourceHandler) error
-
-	// RegisterPromptHandler registers a handler for applying prompt templates.
-	RegisterPromptHandler(handler AsyncPromptHandler) error
-
-	// SetCreateMessageHandler sets the handler for creating messages.
-	SetCreateMessageHandler(handler AsyncCreateMessageHandler) error
-
-	// AddTool adds a tool to the list of available tools.
-	AddTool(tool spec.Tool) error
-
-	// AddResource adds a resource to the list of available resources.
-	AddResource(resource spec.Resource) error
-
-	// AddPrompt adds a prompt to the list of available prompts.
-	AddPrompt(prompt spec.Prompt) error
-
-	// RemoveTool removes a tool from the list of available tools.
-	RemoveTool(name string) error
-
-	// RemoveResource removes a resource from the list of available resources.
-	RemoveResource(uri string) error
-
-	// RemovePrompt removes a prompt from the list of available prompts.
-	RemovePrompt(name string) error
 }
 
 // CreateMessageHandler processes message creation requests synchronously.

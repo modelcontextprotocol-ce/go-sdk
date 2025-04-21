@@ -321,26 +321,11 @@ func main() {
 			},
 		).(server.SyncBuilder).
 		WithCreateMessageHandler(SimpleCreateMessageHandler).
+		WithToolHandler("echo", EchoToolHandler).
+		WithStreamingToolHandler("counting_stream", CountingStreamToolHandler).
+		WithResourceHandler(SimpleResourceHandler).
+		WithPromptHandler(SimplePromptHandler).
 		Build()
-
-	// Register tool handlers
-	if err := s.RegisterToolHandler("echo", EchoToolHandler); err != nil {
-		log.Fatalf("Failed to register echo tool handler: %v", err)
-	}
-
-	if err := s.RegisterStreamToolHandler("counting_stream", CountingStreamToolHandler); err != nil {
-		log.Fatalf("Failed to register counting stream tool handler: %v", err)
-	}
-
-	// Register resource handler
-	if err := s.RegisterResourceHandler(SimpleResourceHandler); err != nil {
-		log.Fatalf("Failed to register resource handler: %v", err)
-	}
-
-	// Register prompt handler
-	if err := s.RegisterPromptHandler(SimplePromptHandler); err != nil {
-		log.Fatalf("Failed to register prompt handler: %v", err)
-	}
 
 	// Start the server
 	fmt.Println("Starting server...")

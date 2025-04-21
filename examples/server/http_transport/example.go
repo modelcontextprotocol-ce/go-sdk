@@ -123,7 +123,7 @@ func main() {
 
 	// Create a server using the builder pattern
 	s := server.NewSync(transportProvider).
-		WithRequestTimeout(30 * time.Second).
+		WithRequestTimeout(30*time.Second).
 		WithServerInfo(spec.Implementation{
 			Name:    "Go MCP HTTP Server",
 			Version: "1.0.0",
@@ -139,11 +139,9 @@ func main() {
 				InputSchema: json.RawMessage(`{"type":"object","properties":{"input":{"type":"string"}}}`),
 			},
 		).(server.SyncBuilder).
+		WithToolHandler("hello-tool", SimpleToolHandler).
+		WithCreateMessageHandler(SimpleMessageHandler).
 		Build()
-
-	// Register handlers
-	s.RegisterToolHandler("hello-tool", SimpleToolHandler)
-	s.SetCreateMessageHandler(SimpleMessageHandler)
 
 	// Start the server
 	fmt.Printf("Starting MCP server on %s...\n", addr)
