@@ -1,8 +1,10 @@
 package server
 
 import (
+	"fmt"
 	"time"
 
+	"github.com/modelcontextprotocol-ce/go-sdk/server/stream"
 	"github.com/modelcontextprotocol-ce/go-sdk/spec"
 	"github.com/modelcontextprotocol-ce/go-sdk/util"
 )
@@ -26,6 +28,12 @@ type Builder interface {
 
 	// WithPrompts sets the prompt templates available on the server.
 	WithPrompts(prompts ...spec.Prompt) Builder
+
+	// WithAPIToken sets an API token for authentication
+	WithAPIToken(token string) Builder
+
+	// WithAPITokenFromConfig loads the API token from the config file
+	WithAPITokenFromConfig() Builder
 }
 
 // SyncBuilder extends Builder with synchronous server specific methods
@@ -81,6 +89,7 @@ type syncServerBuilder struct {
 	streamingToolHandlers map[string]StreamingToolHandler
 	resourceHandler       ResourceHandler
 	promptHandler         PromptHandler
+	apiToken              string
 }
 
 // asyncServerBuilder implements the AsyncBuilder interface for building asynchronous MCP servers
@@ -92,6 +101,7 @@ type asyncServerBuilder struct {
 	toolHandlers         map[string]interface{}
 	resourceHandler      AsyncResourceHandler
 	promptHandler        AsyncPromptHandler
+	apiToken             string
 }
 
 // newSyncServerBuilder creates a new syncServerBuilder with default settings
@@ -160,6 +170,27 @@ func (b *syncServerBuilder) WithPrompts(prompts ...spec.Prompt) Builder {
 	return b
 }
 
+// WithAPIToken sets an API token for authentication
+func (b *syncServerBuilder) WithAPIToken(token string) Builder {
+	b.apiToken = token
+	return b
+}
+
+// WithAPITokenFromConfig loads the API token from the config file
+func (b *syncServerBuilder) WithAPITokenFromConfig() Builder {
+	config, err := util.LoadConfig("")
+	if err != nil {
+		// Log error but continue without token
+		fmt.Printf("Error loading API token from config: %v\n", err)
+		return b
+	}
+
+	if config.APIToken != "" {
+		b.apiToken = config.APIToken
+	}
+	return b
+}
+
 // WithToolHandler sets the handler for a specific tool
 func (b *syncServerBuilder) WithToolHandler(name string, handler ToolHandler) SyncBuilder {
 	util.AssertNotNil(name, "Tool name must not be nil")
@@ -205,6 +236,12 @@ func (b *syncServerBuilder) WithCreateMessageHandler(handler CreateMessageHandle
 
 // Build creates a new McpSyncServer with the configured settings
 func (b *syncServerBuilder) Build() McpSyncServer {
+	// If using HTTP server transport, pass the API token
+	if httpProvider, ok := b.transportProvider.(*stream.HTTPServerTransportProvider); ok && b.apiToken != "" {
+		// Add API token option to the transport provider
+		httpProvider.WithAPIToken(b.apiToken)
+	}
+
 	return &syncServerImpl{
 		transportProvider:    b.transportProvider,
 		requestTimeout:       b.requestTimeout,
@@ -258,6 +295,27 @@ func (b *asyncServerBuilder) WithPrompts(prompts ...spec.Prompt) Builder {
 	return b
 }
 
+// WithAPIToken sets an API token for authentication
+func (b *asyncServerBuilder) WithAPIToken(token string) Builder {
+	b.apiToken = token
+	return b
+}
+
+// WithAPITokenFromConfig loads the API token from the config file
+func (b *asyncServerBuilder) WithAPITokenFromConfig() Builder {
+	config, err := util.LoadConfig("")
+	if err != nil {
+		// Log error but continue without token
+		fmt.Printf("Error loading API token from config: %v\n", err)
+		return b
+	}
+
+	if config.APIToken != "" {
+		b.apiToken = config.APIToken
+	}
+	return b
+}
+
 // WithToolHandler sets the handler for a specific tool
 func (b *asyncServerBuilder) WithToolHandler(name string, handler AsyncToolHandler) AsyncBuilder {
 	util.AssertNotNil(name, "Tool name must not be nil")
@@ -292,6 +350,12 @@ func (b *asyncServerBuilder) WithCreateMessageHandler(handler AsyncCreateMessage
 
 // Build creates a new McpAsyncServer with the configured settings
 func (b *asyncServerBuilder) Build() McpAsyncServer {
+	// If using HTTP server transport, pass the API token
+	if httpProvider, ok := b.transportProvider.(*stream.HTTPServerTransportProvider); ok && b.apiToken != "" {
+		// Add API token option to the transport provider
+		httpProvider.WithAPIToken(b.apiToken)
+	}
+
 	return &asyncServerImpl{
 		transportProvider:    b.transportProvider,
 		requestTimeout:       b.requestTimeout,

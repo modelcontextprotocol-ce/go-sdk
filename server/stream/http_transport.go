@@ -10,6 +10,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -41,6 +42,10 @@ type HTTPServerTransport struct {
 	promptGetHandler            func(ctx context.Context, session spec.McpClientSession, request *spec.GetPromptRequest) (*spec.GetPromptResult, error)
 	loggingSetLevelHandler      func(ctx context.Context, session spec.McpClientSession, request *spec.SetLevelRequest) error
 	createMessageHandler        func(ctx context.Context, session spec.McpClientSession, request *spec.CreateMessageRequest) (*spec.CreateMessageResponse, error)
+
+	// Security
+	apiToken    string
+	requireAuth bool
 
 	// Logger
 	logger util.Logger
@@ -110,6 +115,62 @@ func WithServerLogger(logger util.Logger) HTTPServerOption {
 			t.logger = logger.WithComponent("HTTPServerTransport")
 		}
 	}
+}
+
+// WithAPIToken sets the API token for authentication
+func WithAPIToken(token string) HTTPServerOption {
+	return func(t *HTTPServerTransport) {
+		t.apiToken = token
+		// If a non-empty token is provided, enable authentication
+		if token != "" {
+			t.requireAuth = true
+			t.logger.Info("API token authentication enabled")
+		}
+	}
+}
+
+// WithAuthRequired sets whether authentication is required
+func WithAuthRequired(required bool) HTTPServerOption {
+	return func(t *HTTPServerTransport) {
+		t.requireAuth = required
+		if required && t.apiToken == "" {
+			t.logger.Warn("Authentication required but no API token set")
+		}
+	}
+}
+
+// validateAPIToken checks if the request contains a valid API token
+func (t *HTTPServerTransport) validateAPIToken(r *http.Request) bool {
+	// If auth is not required, always pass
+	if !t.requireAuth {
+		return true
+	}
+
+	if t.apiToken == "" {
+		t.logger.Warn("Authentication required but no API token configured")
+		return false
+	}
+
+	// Check Authorization header (Bearer token)
+	authHeader := r.Header.Get("Authorization")
+	if strings.HasPrefix(authHeader, "Bearer ") {
+		token := strings.TrimPrefix(authHeader, "Bearer ")
+		return t.apiToken == token
+	}
+
+	// Check X-API-Token header
+	apiTokenHeader := r.Header.Get("X-API-Token")
+	if apiTokenHeader != "" {
+		return t.apiToken == apiTokenHeader
+	}
+
+	// Check token query parameter
+	if token := r.URL.Query().Get("token"); token != "" {
+		return t.apiToken == token
+	}
+
+	// No token found in request
+	return false
 }
 
 // Send sends a message over the transport (implementation of McpTransport interface)
@@ -260,6 +321,15 @@ func (t *HTTPServerTransport) handleJSONRPC(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	// Validate API token if authentication is required
+	if t.requireAuth && !t.validateAPIToken(r) {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		t.logger.Warn("Unauthorized access attempt to JSON-RPC endpoint",
+			"path", r.URL.Path,
+			"remoteAddr", r.RemoteAddr)
+		return
+	}
+
 	// Set headers
 	w.Header().Set("Content-Type", "application/json")
 
@@ -379,6 +449,15 @@ func (t *HTTPServerTransport) handleStream(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	// Validate API token if authentication is required
+	if t.requireAuth && !t.validateAPIToken(r) {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		t.logger.Warn("Unauthorized access attempt to stream endpoint",
+			"requestID", requestID,
+			"remoteAddr", r.RemoteAddr)
+		return
+	}
+
 	t.logger.Debug("Stream connection requested", "requestID", requestID)
 
 	// Check if the stream exists
@@ -455,6 +534,15 @@ func (t *HTTPServerTransport) handleDefaultSSE(w http.ResponseWriter, r *http.Re
 		return
 	}
 
+	// Validate API token if authentication is required
+	if t.requireAuth && !t.validateAPIToken(r) {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		t.logger.Warn("Unauthorized access attempt to SSE endpoint",
+			"path", r.URL.Path,
+			"remoteAddr", r.RemoteAddr)
+		return
+	}
+
 	// Set headers for SSE
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -482,7 +570,11 @@ func (t *HTTPServerTransport) handleDefaultSSE(w http.ResponseWriter, r *http.Re
 	ticker := time.NewTicker(15 * time.Second)
 	defer ticker.Stop()
 
+	// Construct endpoint URL with session ID and token (if using authentication)
 	endpoint := fmt.Sprintf("/jsonrpc?sid=%s", sessionID)
+	if t.requireAuth && t.apiToken != "" {
+		endpoint = fmt.Sprintf("%s&token=%s", endpoint, t.apiToken)
+	}
 
 	// Send initial endpoint message - this is what VS Code MCP clients expect
 	if _, err := session.Respond(r.Context(), "endpoint", endpoint); err != nil {
@@ -1346,6 +1438,13 @@ func WithProviderLogger(logger util.Logger) func(*HTTPServerTransportProvider) {
 			p.logger = logger.WithComponent("HTTPServerTransportProvider")
 		}
 	}
+}
+
+// WithAPIToken sets a custom API token for the server transport provider
+func (p *HTTPServerTransportProvider) WithAPIToken(token string) *HTTPServerTransportProvider {
+	p.logger.Info("Setting API token for HTTP server transport")
+	p.options = append(p.options, WithAPIToken(token))
+	return p
 }
 
 // CreateTransport creates a new server transport
