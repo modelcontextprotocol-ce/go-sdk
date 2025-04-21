@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol-ce/go-sdk/spec"
+	"github.com/modelcontextprotocol-ce/go-sdk/util"
 )
 
 // httpClientSession represents a client connection in the HTTP server transport
@@ -23,6 +24,7 @@ type httpClientSession struct {
 	streamingHandlers    map[string]func(*spec.CreateMessageResult)
 	metadata             map[string]interface{}
 	w                    http.ResponseWriter
+	logger               util.Logger
 	mu                   sync.RWMutex
 }
 
@@ -72,28 +74,54 @@ func (s *httpClientSession) SendRequest(ctx context.Context, method string, para
 }
 
 // Respond sends a response to the client for a specific event
-func (s *httpClientSession) Respond(ctx context.Context, event string, message interface{}) error {
+func (s *httpClientSession) Respond(ctx context.Context, event string, message interface{}) (body []byte, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	var body []byte
-	if b, ok := message.([]byte); ok {
-		body = b
-	} else if msg, ok := message.(string); ok {
-		body = []byte(msg)
-	} else {
-		body, _ = json.Marshal(message)
+	// Log the response attempt
+	s.logger.Debug("Preparing to send response", "sessionID", s.id, "event", event)
+
+	switch message := message.(type) {
+	case *spec.JSONRPCMessage:
+		body, err = json.Marshal(message)
+		if err != nil {
+			s.logger.Error("Failed to marshal JSON-RPC message", "error", err)
+			return nil, fmt.Errorf("failed to marshal JSON-RPC message: %w", err)
+		}
+	case []byte:
+		body = message
+	case *[]byte:
+		body = *message
+	case string:
+		body = []byte(message)
+	case *string:
+		body = []byte(*message)
+	default:
+		if b, err := json.Marshal(message); err != nil {
+			s.logger.Error("Failed to marshal message", "error", err)
+			return nil, fmt.Errorf("failed to marshal message: %w", err)
+		} else {
+			body = b
+		}
 	}
 
-	fmt.Fprintf(s.w, "event: %s\ndata: %s\n\n", event, body)
+	// Write the event and data to the response
+	_, writeErr := fmt.Fprintf(s.w, "event: %s\ndata: %s\n\n", event, body)
+	if writeErr != nil {
+		s.logger.Error("Failed to write response", "error", writeErr, "event", event)
+		return body, fmt.Errorf("failed to write response: %w", writeErr)
+	}
 
 	// Create a flusher for streaming
 	flusher, ok := s.w.(http.Flusher)
 	if ok {
 		flusher.Flush()
+		s.logger.Debug("Response sent and flushed", "sessionID", s.id, "event", event, "bodySize", len(body))
+	} else {
+		s.logger.Warn("Could not flush response - client might not support streaming", "sessionID", s.id)
 	}
 
-	return nil
+	return body, nil
 }
 
 // SendMessage sends a JSON-RPC message directly
@@ -159,26 +187,87 @@ func (s *httpClientSession) UnregisterStreamHandler(streamID string) {
 
 // NotifyPromptsListChanged sends a notification that the prompts list has changed
 func (s *httpClientSession) NotifyPromptsListChanged() error {
-	// Implement the logic for notifying prompts list changes if needed
-	return nil
+	notification := &spec.JSONRPCMessage{
+		JSONRPC: spec.JSONRPCVersion,
+		Method:  spec.MethodNotificationPromptsListChanged,
+		Params:  json.RawMessage("{}"),
+	}
+
+	_, err := s.Respond(context.Background(), "notification", notification)
+	if err != nil {
+		return fmt.Errorf("failed to marshal prompts list changed notification: %w", err)
+	}
+
+	return err
 }
 
 // NotifyResourcesListChanged sends a notification that the resources list has changed
 func (s *httpClientSession) NotifyResourcesListChanged() error {
-	// Implement the logic for notifying resources list changes if needed
-	return nil
+	notification := &spec.JSONRPCMessage{
+		JSONRPC: spec.JSONRPCVersion,
+		Method:  spec.MethodNotificationResourcesListChanged,
+		Params:  json.RawMessage("{}"),
+	}
+
+	_, err := s.Respond(context.Background(), "notification", notification)
+	if err != nil {
+		return fmt.Errorf("failed to marshal resources list changed notification: %w", err)
+	}
+
+	return err
 }
 
 // NotifyResourceChanged sends a notification that a specific resource has changed
 func (s *httpClientSession) NotifyResourceChanged(uri string, data []byte) error {
-	// Implement the logic for notifying resource changes if needed
-	return nil
+	// Check if this client is subscribed to this resource
+	s.mu.RLock()
+	subscribed := s.subscriptions[uri]
+	s.mu.RUnlock()
+
+	if !subscribed {
+		// Client is not subscribed to this resource
+		return nil
+	}
+
+	// Create resource change notification
+	params := map[string]interface{}{
+		"uri":      uri,
+		"contents": data,
+	}
+
+	paramsBytes, err := json.Marshal(params)
+	if err != nil {
+		return fmt.Errorf("failed to marshal resource change params: %w", err)
+	}
+
+	notification := &spec.JSONRPCMessage{
+		JSONRPC: spec.JSONRPCVersion,
+		Method:  spec.MethodNotificationResourceChanged,
+		Params:  paramsBytes,
+	}
+
+	_, err = s.Respond(context.Background(), "notification", notification)
+	if err != nil {
+		return fmt.Errorf("failed to marshal resource changed notification: %w", err)
+	}
+
+	return err
 }
 
 // NotifyToolsListChanged sends a notification that the tools list has changed
 func (s *httpClientSession) NotifyToolsListChanged() error {
-	// Implement the logic for notifying tools list changes if needed
-	return nil
+	notification := &spec.JSONRPCMessage{
+		JSONRPC: spec.JSONRPCVersion,
+		Method:  spec.MethodNotificationToolsListChanged,
+		Params:  json.RawMessage("{}"),
+	}
+
+	_, err := s.Respond(context.Background(), "notification", notification)
+	if err != nil {
+		return fmt.Errorf("failed to marshal tools list changed notification: %w", err)
+	}
+
+	return err
 }
 
 // AddSubscription adds a subscription for a resource URI
@@ -218,8 +307,15 @@ func (s *httpClientSession) GetSubscriptions() []string {
 }
 
 // createClientSession creates a new client session with the given ID
-func createClientSession(sessionID string, w http.ResponseWriter) *httpClientSession {
-	return &httpClientSession{
+func createClientSession(sessionID string, w http.ResponseWriter, logger util.Logger) *httpClientSession {
+	// If no logger is provided, create a default one
+	if logger == nil {
+		logger = util.DefaultRootLogger().WithComponent("ClientSession:" + sessionID)
+	} else {
+		logger = logger.WithComponent("ClientSession:" + sessionID)
+	}
+
+	session := &httpClientSession{
 		id:                   sessionID,
 		lastActive:           time.Now(),
 		subscriptions:        make(map[string]bool),
@@ -227,5 +323,11 @@ func createClientSession(sessionID string, w http.ResponseWriter) *httpClientSes
 		streamingHandlers:    make(map[string]func(*spec.CreateMessageResult)),
 		w:                    w,
 		metadata:             make(map[string]interface{}),
+		logger:               logger,
 	}
+
+	// Log session creation
+	session.logger.Info("Created new client session", "id", sessionID)
+
+	return session
 }

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol-ce/go-sdk/spec"
+	"github.com/modelcontextprotocol-ce/go-sdk/util"
 )
 
 // HTTPServerTransport implements a server-side transport over HTTP with SSE streaming support
@@ -40,6 +41,9 @@ type HTTPServerTransport struct {
 	loggingSetLevelHandler      func(ctx context.Context, session spec.McpClientSession, request *spec.SetLevelRequest) error
 	createMessageHandler        func(ctx context.Context, session spec.McpClientSession, request *spec.CreateMessageRequest) (*spec.CreateMessageResponse, error)
 
+	// Logger
+	logger util.Logger
+
 	// State
 	debug     bool
 	isRunning bool
@@ -51,6 +55,9 @@ type HTTPServerTransport struct {
 func NewHTTPServerTransport(addr string, options ...HTTPServerOption) *HTTPServerTransport {
 	router := http.NewServeMux()
 
+	// Create a default logger if none is provided later through options
+	defaultLogger := util.DefaultRootLogger().WithComponent("HTTPServerTransport")
+
 	t := &HTTPServerTransport{
 		addr:          addr,
 		router:        router,
@@ -58,6 +65,7 @@ func NewHTTPServerTransport(addr string, options ...HTTPServerOption) *HTTPServe
 		activeStreams: make(map[string]chan *spec.CreateMessageResult),
 		sessions:      make(map[string]*httpClientSession),
 		debug:         false,
+		logger:        defaultLogger,
 	}
 
 	// Apply options
@@ -67,6 +75,8 @@ func NewHTTPServerTransport(addr string, options ...HTTPServerOption) *HTTPServe
 
 	// Set up routes
 	t.setupRoutes()
+
+	t.logger.Info("Created HTTP server transport", "addr", addr)
 
 	return t
 }
@@ -78,6 +88,9 @@ type HTTPServerOption func(*HTTPServerTransport)
 func WithServerDebug(debug bool) HTTPServerOption {
 	return func(t *HTTPServerTransport) {
 		t.debug = debug
+		if t.logger != nil {
+			t.logger.Debug("Debug mode enabled for HTTP server transport")
+		}
 	}
 }
 
@@ -86,6 +99,15 @@ func WithCustomServer(server *http.Server) HTTPServerOption {
 	return func(t *HTTPServerTransport) {
 		t.server = server
 		t.server.Handler = t.router
+	}
+}
+
+// WithServerLogger sets a custom logger for the server
+func WithServerLogger(logger util.Logger) HTTPServerOption {
+	return func(t *HTTPServerTransport) {
+		if logger != nil {
+			t.logger = logger.WithComponent("HTTPServerTransport")
+		}
 	}
 }
 
@@ -132,19 +154,18 @@ func (t *HTTPServerTransport) Start() error {
 	defer t.mu.Unlock()
 
 	if t.isRunning {
+		t.logger.Warn("Server is already running", "addr", t.addr)
 		return errors.New("server is already running")
 	}
 
 	t.isRunning = true
 
-	if t.debug {
-		log.Printf("Starting HTTP server on %s", t.addr)
-	}
+	t.logger.Info("Starting HTTP server", "addr", t.addr)
 
 	// Start the server in a goroutine
 	go func() {
 		if err := t.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Printf("HTTP server error: %v", err)
+			t.logger.Error("HTTP server error", "error", err)
 		}
 	}()
 
@@ -157,27 +178,30 @@ func (t *HTTPServerTransport) Stop() error {
 	defer t.mu.Unlock()
 
 	if !t.isRunning {
+		t.logger.Debug("Server is not running, nothing to stop", "addr", t.addr)
 		return nil
 	}
 
-	if t.debug {
-		log.Printf("Stopping HTTP server")
-	}
+	t.logger.Info("Stopping HTTP server", "addr", t.addr)
 
 	// Close all active streams
 	t.streamsMu.Lock()
+	streamCount := len(t.activeStreams)
 	for id, stream := range t.activeStreams {
 		close(stream)
 		delete(t.activeStreams, id)
 	}
 	t.streamsMu.Unlock()
+	t.logger.Debug("Closed active streams", "count", streamCount)
 
 	// Shutdown the server
 	if err := t.server.Close(); err != nil {
+		t.logger.Error("Server close error", "error", err)
 		return fmt.Errorf("server close error: %w", err)
 	}
 
 	t.isRunning = false
+	t.logger.Info("HTTP server stopped", "addr", t.addr)
 	return nil
 }
 
@@ -187,27 +211,30 @@ func (t *HTTPServerTransport) StopGracefully(ctx context.Context) error {
 	defer t.mu.Unlock()
 
 	if !t.isRunning {
+		t.logger.Debug("Server is not running, nothing to stop gracefully", "addr", t.addr)
 		return nil
 	}
 
-	if t.debug {
-		log.Printf("Gracefully stopping HTTP server")
-	}
+	t.logger.Info("Gracefully stopping HTTP server", "addr", t.addr)
 
 	// Close all active streams
 	t.streamsMu.Lock()
+	streamCount := len(t.activeStreams)
 	for id, stream := range t.activeStreams {
 		close(stream)
 		delete(t.activeStreams, id)
 	}
 	t.streamsMu.Unlock()
+	t.logger.Debug("Closed active streams", "count", streamCount)
 
 	// Shutdown the server gracefully
 	if err := t.server.Shutdown(ctx); err != nil {
+		t.logger.Error("Server shutdown error", "error", err)
 		return fmt.Errorf("server shutdown error: %w", err)
 	}
 
 	t.isRunning = false
+	t.logger.Info("HTTP server gracefully stopped", "addr", t.addr)
 	return nil
 }
 
@@ -228,6 +255,7 @@ func (t *HTTPServerTransport) handleJSONRPC(w http.ResponseWriter, r *http.Reque
 	// Only accept POST requests
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		t.logger.Warn("Method not allowed for JSON-RPC endpoint", "method", r.Method, "path", r.URL.Path)
 		return
 	}
 
@@ -237,6 +265,7 @@ func (t *HTTPServerTransport) handleJSONRPC(w http.ResponseWriter, r *http.Reque
 	// Read the request body
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
+		t.logger.Error("Failed to read request body", "error", err)
 		writeJSONError(w, &spec.JSONRPCError{
 			Code:    -32700,
 			Message: "Parse error",
@@ -248,6 +277,7 @@ func (t *HTTPServerTransport) handleJSONRPC(w http.ResponseWriter, r *http.Reque
 	// Parse the JSON-RPC message
 	var message spec.JSONRPCMessage
 	if err := json.Unmarshal(body, &message); err != nil {
+		t.logger.Error("Failed to unmarshal JSON-RPC message", "error", err)
 		writeJSONError(w, &spec.JSONRPCError{
 			Code:    -32700,
 			Message: "Parse error",
@@ -255,6 +285,8 @@ func (t *HTTPServerTransport) handleJSONRPC(w http.ResponseWriter, r *http.Reque
 		})
 		return
 	}
+
+	t.logger.Debug("Received JSON-RPC request", "method", message.Method, "id", message.ID)
 
 	// Extract or create session ID from headers or cookies
 	sessionID := t.getOrCreateSessionID(r)
@@ -265,27 +297,71 @@ func (t *HTTPServerTransport) handleJSONRPC(w http.ResponseWriter, r *http.Reque
 	// Process the request based on method
 	response, err := t.processJSONRPCRequest(r.Context(), &message, session)
 	if err != nil {
-		if t.debug {
-			log.Printf("ERROR processing request: %v", err)
+		t.logger.Error("Error processing JSON-RPC request", "method", message.Method, "error", err, "sessionID", sessionID)
+
+		// Create error response
+		errorResponse := &spec.JSONRPCMessage{
+			JSONRPC: spec.JSONRPCVersion,
+			ID:      message.ID,
+			Error: &spec.JSONRPCError{
+				Code:    -32000,
+				Message: "Server error",
+				Data:    json.RawMessage([]byte(err.Error())),
+			},
 		}
-		writeJSONError(w, &spec.JSONRPCError{
-			Code:    -32000,
-			Message: "Server error",
-			Data:    json.RawMessage([]byte(err.Error())),
-		})
-		return
-	}
-	// Marshal the response
-	responseBytes, err := json.Marshal(response)
-	if err != nil {
-		writeJSONError(w, &spec.JSONRPCError{
-			Code:    -32603,
-			Message: "Internal error",
-			Data:    json.RawMessage([]byte(fmt.Sprintf("Failed to marshal response: %v", err))),
-		})
+
+		// Marshal the error response
+		responseBytes, err := json.Marshal(errorResponse)
+		if err != nil {
+			t.logger.Error("Failed to marshal error response", "error", err)
+		}
+
+		// Send through the session's Respond method
+		if _, respErr := session.Respond(r.Context(), "message", errorResponse); respErr != nil {
+			t.logger.Error("Failed to send error response through session", "error", respErr)
+		}
+
+		// Also write to the response for HTTP clients that don't support SSE
+		w.Write(responseBytes)
 		return
 	}
 
+	// Marshal the response
+	responseBytes, err := json.Marshal(response)
+	if err != nil {
+		t.logger.Error("Failed to marshal JSON-RPC response", "error", err)
+		// Handle marshaling error
+		errorResponse := &spec.JSONRPCMessage{
+			JSONRPC: spec.JSONRPCVersion,
+			ID:      message.ID,
+			Error: &spec.JSONRPCError{
+				Code:    -32603,
+				Message: "Internal error",
+				Data:    json.RawMessage([]byte(fmt.Sprintf("Failed to marshal response: %v", err))),
+			},
+		}
+
+		// Marshal the error response
+		errorBytes, _ := json.Marshal(errorResponse)
+
+		// Send through the session's Respond method
+		if _, respErr := session.Respond(r.Context(), "message", errorResponse); respErr != nil {
+			t.logger.Error("Failed to send error response through session", "error", respErr)
+		}
+
+		// Also write to the response for HTTP clients that don't support SSE
+		w.Write(errorBytes)
+		return
+	}
+
+	t.logger.Debug("Sending JSON-RPC response", "method", message.Method, "id", message.ID, "sessionID", sessionID)
+
+	// Send through the session's Respond method
+	if _, respErr := session.Respond(r.Context(), "message", response); respErr != nil {
+		t.logger.Error("Failed to send response through session", "error", respErr)
+	}
+
+	// Also write to the response for HTTP clients that don't support SSE
 	w.Write(responseBytes)
 }
 
@@ -298,8 +374,11 @@ func (t *HTTPServerTransport) handleStream(w http.ResponseWriter, r *http.Reques
 	// Validate request ID
 	if requestID == "" {
 		http.Error(w, "Invalid stream ID", http.StatusBadRequest)
+		t.logger.Warn("Invalid stream ID in request", "path", r.URL.Path)
 		return
 	}
+
+	t.logger.Debug("Stream connection requested", "requestID", requestID)
 
 	// Check if the stream exists
 	t.streamsMu.RLock()
@@ -308,6 +387,7 @@ func (t *HTTPServerTransport) handleStream(w http.ResponseWriter, r *http.Reques
 
 	if !exists {
 		http.Error(w, "Stream not found", http.StatusNotFound)
+		t.logger.Warn("Stream not found", "requestID", requestID)
 		return
 	}
 
@@ -324,28 +404,31 @@ func (t *HTTPServerTransport) handleStream(w http.ResponseWriter, r *http.Reques
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "Streaming not supported", http.StatusInternalServerError)
+		t.logger.Error("Streaming not supported by client", "requestID", requestID)
 		return
 	}
+
+	t.logger.Info("Started streaming connection", "requestID", requestID)
 
 	// Stream results
 	for {
 		select {
 		case <-notify:
 			// Client disconnected
+			t.logger.Info("Client disconnected from stream", "requestID", requestID)
 			return
 
 		case result, ok := <-stream:
 			if !ok {
 				// Channel closed, end streaming
+				t.logger.Info("Stream channel closed", "requestID", requestID)
 				return
 			}
 
 			// Marshal the result to JSON
 			data, err := json.Marshal(result)
 			if err != nil {
-				if t.debug {
-					log.Printf("ERROR: Failed to marshal streaming result: %v", err)
-				}
+				t.logger.Error("Failed to marshal streaming result", "requestID", requestID, "error", err)
 				continue
 			}
 
@@ -355,6 +438,7 @@ func (t *HTTPServerTransport) handleStream(w http.ResponseWriter, r *http.Reques
 
 			// If this is the final message, end streaming
 			if result.StopReason != "" {
+				t.logger.Info("Ending stream with stop reason", "requestID", requestID, "stopReason", result.StopReason)
 				return
 			}
 		}
@@ -366,6 +450,7 @@ func (t *HTTPServerTransport) handleDefaultSSE(w http.ResponseWriter, r *http.Re
 	// Only accept GET requests
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		t.logger.Warn("Method not allowed for default SSE endpoint", "method", r.Method, "path", r.URL.Path)
 		return
 	}
 
@@ -390,31 +475,32 @@ func (t *HTTPServerTransport) handleDefaultSSE(w http.ResponseWriter, r *http.Re
 	session.lastActive = time.Now()
 	session.mu.Unlock()
 
-	// Log connection if debug is enabled
-	if t.debug {
-		log.Printf("Client connected to default SSE endpoint: %s", sessionID)
-	}
+	t.logger.Info("Client connected to default SSE endpoint", "sessionID", sessionID)
 
 	// Create ping ticker
 	ticker := time.NewTicker(15 * time.Second)
 	defer ticker.Stop()
 
 	// Send initial endpoint message - this is what VS Code MCP clients expect
-	session.Respond(r.Context(), "endpoint", "/jsonrpc")
+	if _, err := session.Respond(r.Context(), "endpoint", "/jsonrpc"); err != nil {
+		t.logger.Error("Failed to send initial endpoint message", "sessionID", sessionID, "error", err)
+	}
 
 	// Stream ping messages until the client disconnects
 	for {
 		select {
 		case <-notify:
 			// Client disconnected
-			if t.debug {
-				log.Printf("Client disconnected from default SSE endpoint: %s", sessionID)
-			}
+			t.logger.Info("Client disconnected from default SSE endpoint", "sessionID", sessionID)
 			return
 
 		case <-ticker.C:
 			// Send an endpoint message with server info
-			session.Respond(context.Background(), "endpoint", "/jsonrpc")
+			if _, err := session.Respond(context.Background(), "endpoint", "/jsonrpc"); err != nil {
+				t.logger.Warn("Failed to send ping message", "sessionID", sessionID, "error", err)
+			} else {
+				t.logger.Debug("Sent ping message", "sessionID", sessionID)
+			}
 
 			// Update session last active time
 			session.lastActive = time.Now()
@@ -427,50 +513,68 @@ func (t *HTTPServerTransport) processJSONRPCRequest(ctx context.Context, message
 	// Update session last active time
 	session.lastActive = time.Now()
 
+	var response *spec.JSONRPCMessage
+	var err error
+
 	// Process by method
 	switch message.Method {
 	case spec.MethodInitialize:
-		return t.handleInitialize(ctx, message, session)
+		response, err = t.handleInitialize(ctx, message, session)
 
 	case spec.MethodPing:
-		return t.handlePing(ctx, message, session)
+		response, err = t.handlePing(ctx, message, session)
 
 	case spec.MethodToolsList:
-		return t.handleToolsList(ctx, message, session)
+		response, err = t.handleToolsList(ctx, message, session)
 
 	case spec.MethodToolsCall:
-		return t.handleToolsCall(ctx, message, session)
+		response, err = t.handleToolsCall(ctx, message, session)
 
 	case spec.MethodResourcesList:
-		return t.handleResourcesList(ctx, message, session)
+		response, err = t.handleResourcesList(ctx, message, session)
 
 	case spec.MethodResourcesRead:
-		return t.handleResourcesRead(ctx, message, session)
+		response, err = t.handleResourcesRead(ctx, message, session)
 
 	case spec.MethodResourcesSubscribe:
-		return t.handleResourcesSubscribe(ctx, message, session)
+		response, err = t.handleResourcesSubscribe(ctx, message, session)
 
 	case spec.MethodResourcesUnsubscribe:
-		return t.handleResourcesUnsubscribe(ctx, message, session)
+		response, err = t.handleResourcesUnsubscribe(ctx, message, session)
 
 	case spec.MethodPromptList:
-		return t.handlePromptsList(ctx, message, session)
+		response, err = t.handlePromptsList(ctx, message, session)
 
 	case spec.MethodPromptGet:
-		return t.handlePromptGet(ctx, message, session)
+		response, err = t.handlePromptGet(ctx, message, session)
 
 	case spec.MethodLoggingSetLevel:
-		return t.handleLoggingSetLevel(ctx, message, session)
+		response, err = t.handleLoggingSetLevel(ctx, message, session)
 
 	case spec.MethodSamplingCreateMessage:
-		return t.handleCreateMessage(ctx, message, session)
+		response, err = t.handleCreateMessage(ctx, message, session)
 
 	case spec.MethodContentCreateMessageStream:
-		return t.handleCreateMessageStream(ctx, message, session)
+		response, err = t.handleCreateMessageStream(ctx, message, session)
 
 	default:
 		return nil, fmt.Errorf("unsupported method: %s", message.Method)
 	}
+
+	if err != nil {
+		return nil, err
+	}
+
+	// Each response should also be sent through the session's Respond method
+	// to ensure it follows the MCP specification for client communication
+	if response != nil {
+		_, err := session.Respond(ctx, "message", response)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal JSON-RPC response: %w", err)
+		}
+	}
+
+	return response, nil
 }
 
 // Implementation of handler methods
@@ -1102,8 +1206,10 @@ func (t *HTTPServerTransport) getOrCreateSession(sessionID string, w http.Respon
 
 	session, exists := t.sessions[sessionID]
 	if !exists {
-		session = createClientSession(sessionID, w)
+		// Create a new session with the transport's logger
+		session = createClientSession(sessionID, w, t.logger)
 		t.sessions[sessionID] = session
+		t.logger.Debug("Created new client session", "sessionID", sessionID)
 	}
 
 	return session
@@ -1194,6 +1300,7 @@ func (t *HTTPServerTransport) SetCreateMessageHandler(handler func(ctx context.C
 type HTTPServerTransportProvider struct {
 	addr    string
 	options []HTTPServerOption
+	logger  util.Logger
 
 	transport *HTTPServerTransport
 	mu        sync.Mutex
@@ -1201,14 +1308,43 @@ type HTTPServerTransportProvider struct {
 
 // NewHTTPServerTransportProvider creates a new HTTP server transport provider
 func NewHTTPServerTransportProvider(addr string, options ...HTTPServerOption) *HTTPServerTransportProvider {
+	// Create default logger
+	logger := util.DefaultRootLogger().WithComponent("HTTPServerTransportProvider")
+
 	return &HTTPServerTransportProvider{
 		addr:    addr,
 		options: options,
+		logger:  logger,
+	}
+}
+
+// WithProviderLogger sets a custom logger for the server transport provider
+func WithProviderLogger(logger util.Logger) func(*HTTPServerTransportProvider) {
+	return func(p *HTTPServerTransportProvider) {
+		if logger != nil {
+			p.logger = logger.WithComponent("HTTPServerTransportProvider")
+		}
 	}
 }
 
 // CreateTransport creates a new server transport
 func (p *HTTPServerTransportProvider) CreateTransport() (spec.McpServerTransport, error) {
+	// Add logger option if not already present
+	hasLoggerOption := false
+	for _, opt := range p.options {
+		// This is an approximate way to check if logger option is present
+		// We can't directly check function equality
+		if fmt.Sprintf("%T", opt) == fmt.Sprintf("%T", WithServerLogger(nil)) {
+			hasLoggerOption = true
+			break
+		}
+	}
+
+	if !hasLoggerOption {
+		p.options = append(p.options, WithServerLogger(p.logger))
+	}
+
+	p.logger.Debug("Creating new HTTP server transport", "addr", p.addr)
 	transport := NewHTTPServerTransport(p.addr, p.options...)
 	return transport, nil
 }
@@ -1219,6 +1355,22 @@ func (p *HTTPServerTransportProvider) GetTransport() (spec.McpServerTransport, e
 	defer p.mu.Unlock()
 
 	if p.transport == nil {
+		p.logger.Info("Initializing HTTP server transport", "addr", p.addr)
+
+		// Add logger option if not already present
+		hasLoggerOption := false
+		for _, opt := range p.options {
+			// This is an approximate way to check if logger option is present
+			if fmt.Sprintf("%T", opt) == fmt.Sprintf("%T", WithServerLogger(nil)) {
+				hasLoggerOption = true
+				break
+			}
+		}
+
+		if !hasLoggerOption {
+			p.options = append(p.options, WithServerLogger(p.logger))
+		}
+
 		transport := NewHTTPServerTransport(p.addr, p.options...)
 		p.transport = transport
 	}
