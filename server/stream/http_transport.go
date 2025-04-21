@@ -377,19 +377,14 @@ func (t *HTTPServerTransport) handleJSONRPC(w http.ResponseWriter, r *http.Reque
 			Error: &spec.JSONRPCError{
 				Code:    -32000,
 				Message: "Server error",
-				Data:    json.RawMessage([]byte(err.Error())),
+				Data:    json.RawMessage(err.Error()),
 			},
 		}
 
 		// Marshal the error response
-		responseBytes, err := json.Marshal(errorResponse)
+		responseBytes, err := session.Respond(r.Context(), "message", errorResponse)
 		if err != nil {
-			t.logger.Error("Failed to marshal error response", "error", err)
-		}
-
-		// Send through the session's Respond method
-		if _, respErr := session.Respond(r.Context(), "message", errorResponse); respErr != nil {
-			t.logger.Error("Failed to send error response through session", "error", respErr)
+			t.logger.Error("Failed to send error response through session", "error", err)
 		}
 
 		// Also write to the response for HTTP clients that don't support SSE
@@ -615,6 +610,19 @@ func (t *HTTPServerTransport) processJSONRPCRequest(ctx context.Context, message
 	switch message.Method {
 	case spec.MethodInitialize:
 		response, err = t.handleInitialize(ctx, message, session)
+
+	case spec.MethodNotificationInitialized:
+		// Handle the initialized notification (no response needed for notifications)
+		t.logger.Info("Received initialized notification from client", "sessionID", session.id)
+		session.mu.Lock()
+		session.metadata["client_initialized"] = true
+		session.mu.Unlock()
+		response = &spec.JSONRPCMessage{
+			JSONRPC: message.JSONRPC,
+			ID:      message.ID,
+			Method:  message.Method,
+			Result:  json.RawMessage(`{"status": "ok"}`),
+		}
 
 	case spec.MethodPing:
 		response, err = t.handlePing(ctx, message, session)
