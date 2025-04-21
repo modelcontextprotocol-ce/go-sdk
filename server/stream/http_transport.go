@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"sync"
 	"time"
 
@@ -481,8 +482,10 @@ func (t *HTTPServerTransport) handleDefaultSSE(w http.ResponseWriter, r *http.Re
 	ticker := time.NewTicker(15 * time.Second)
 	defer ticker.Stop()
 
+	endpoint := fmt.Sprintf("/jsonrpc?sid=%s", sessionID)
+
 	// Send initial endpoint message - this is what VS Code MCP clients expect
-	if _, err := session.Respond(r.Context(), "endpoint", "/jsonrpc"); err != nil {
+	if _, err := session.Respond(r.Context(), "endpoint", endpoint); err != nil {
 		t.logger.Error("Failed to send initial endpoint message", "sessionID", sessionID, "error", err)
 	}
 
@@ -496,7 +499,7 @@ func (t *HTTPServerTransport) handleDefaultSSE(w http.ResponseWriter, r *http.Re
 
 		case <-ticker.C:
 			// Send an endpoint message with server info
-			if _, err := session.Respond(context.Background(), "endpoint", "/jsonrpc"); err != nil {
+			if _, err := session.Respond(context.Background(), "endpoint", endpoint); err != nil {
 				t.logger.Warn("Failed to send ping message", "sessionID", sessionID, "error", err)
 			} else {
 				t.logger.Debug("Sent ping message", "sessionID", sessionID)
@@ -1186,17 +1189,35 @@ func (t *HTTPServerTransport) getOrCreateSessionID(r *http.Request) string {
 	// Try to get from header
 	sessionID := r.Header.Get("X-MCP-Session-ID")
 	if sessionID != "" {
+		t.logger.Debug("Using session ID from header", "sessionID", sessionID)
 		return sessionID
+	}
+
+	// Try to get from query parameter "sid"
+	if sid := r.URL.Query().Get("sid"); sid == "" {
+		// URL-decode the sid parameter
+		decodedSid, err := url.QueryUnescape(sid)
+		if err != nil {
+			t.logger.Warn("Failed to URL-decode sid parameter", "sid", sid, "error", err)
+		} else if decodedSid != "" {
+			t.logger.Debug("Using session ID from query parameter", "sessionID", decodedSid)
+			return decodedSid
+		}
+	} else {
+		return sid
 	}
 
 	// Try to get from cookie
 	cookie, err := r.Cookie("MCP-Session-ID")
 	if err == nil && cookie.Value != "" {
+		t.logger.Debug("Using session ID from cookie", "sessionID", cookie.Value)
 		return cookie.Value
 	}
 
 	// Generate a new session ID
-	return generateSessionID()
+	newID := generateSessionID()
+	t.logger.Debug("Generated new session ID", "sessionID", newID)
+	return newID
 }
 
 // getOrCreateSession gets or creates a client session
