@@ -32,6 +32,18 @@ type Builder interface {
 type SyncBuilder interface {
 	Builder
 
+	// WithToolHandler sets the handler for a specific tool.
+	WithToolHandler(name string, handler ToolHandler) SyncBuilder
+
+	// WithStreamingToolHandler sets a streaming handler for a specific tool.
+	WithStreamingToolHandler(name string, handler StreamingToolHandler) SyncBuilder
+
+	// WithResourceHandler sets the handler for resources.
+	WithResourceHandler(handler ResourceHandler) SyncBuilder
+
+	// WithPromptHandler sets the handler for prompts.
+	WithPromptHandler(handler PromptHandler) SyncBuilder
+
 	// WithCreateMessageHandler sets the handler for creating messages.
 	WithCreateMessageHandler(handler CreateMessageHandler) SyncBuilder
 
@@ -43,6 +55,15 @@ type SyncBuilder interface {
 type AsyncBuilder interface {
 	Builder
 
+	// WithToolHandler sets the handler for a specific tool.
+	WithToolHandler(name string, handler AsyncToolHandler) AsyncBuilder
+
+	// WithResourceHandler sets the handler for resources.
+	WithResourceHandler(handler AsyncResourceHandler) AsyncBuilder
+
+	// WithPromptHandler sets the handler for prompts.
+	WithPromptHandler(handler AsyncPromptHandler) AsyncBuilder
+
 	// WithCreateMessageHandler sets the handler for creating messages.
 	WithCreateMessageHandler(handler AsyncCreateMessageHandler) AsyncBuilder
 
@@ -52,13 +73,14 @@ type AsyncBuilder interface {
 
 // syncServerBuilder implements the SyncBuilder interface for building synchronous MCP servers
 type syncServerBuilder struct {
-	transportProvider    spec.McpServerTransportProvider
-	requestTimeout       time.Duration
-	features             *ServerFeatures
-	createMessageHandler CreateMessageHandler
-	toolHandlers         map[string]ToolHandler
-	resourceHandler      ResourceHandler
-	promptHandler        PromptHandler
+	transportProvider     spec.McpServerTransportProvider
+	requestTimeout        time.Duration
+	features              *ServerFeatures
+	createMessageHandler  CreateMessageHandler
+	toolHandlers          map[string]ToolHandler
+	streamingToolHandlers map[string]StreamingToolHandler
+	resourceHandler       ResourceHandler
+	promptHandler         PromptHandler
 }
 
 // asyncServerBuilder implements the AsyncBuilder interface for building asynchronous MCP servers
@@ -146,6 +168,17 @@ func (b *syncServerBuilder) WithToolHandler(name string, handler ToolHandler) Sy
 		b.toolHandlers = make(map[string]ToolHandler)
 	}
 	b.toolHandlers[name] = handler
+	return b
+}
+
+// WithStreamingToolHandler sets a streaming handler for a specific tool
+func (b *syncServerBuilder) WithStreamingToolHandler(name string, handler StreamingToolHandler) SyncBuilder {
+	util.AssertNotNil(name, "Tool name must not be nil")
+	util.AssertNotNil(handler, "Streaming tool handler must not be nil")
+	if b.toolHandlers == nil {
+		b.toolHandlers = make(map[string]ToolHandler)
+	}
+	b.streamingToolHandlers[name] = handler
 	return b
 }
 
