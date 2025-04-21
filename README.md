@@ -99,10 +99,9 @@ func main() {
                 Parameters:  []byte(`{"type":"object","properties":{}}`),
             },
         ).
+        WithAPIToken("<X-API-Token>").(server.SyncBuilder).
+        WithToolHandler("my-tool", MyToolHandler).
         Build()
-    
-    // Register tool handler
-    s.RegisterToolHandler("my-tool", MyToolHandler)
     
     // Start the server
     err := s.Start()
