@@ -603,6 +603,8 @@ func (t *HTTPServerTransport) processJSONRPCRequest(ctx context.Context, message
 	// Update session last active time
 	session.lastActive = time.Now()
 
+	t.logger.Info("Received request from client", "sid", session.id, "method", message.Method, "id", message.ID)
+
 	var response *spec.JSONRPCMessage
 	var err error
 
@@ -612,8 +614,6 @@ func (t *HTTPServerTransport) processJSONRPCRequest(ctx context.Context, message
 		response, err = t.handleInitialize(ctx, message, session)
 
 	case spec.MethodNotificationInitialized:
-		// Handle the initialized notification (no response needed for notifications)
-		t.logger.Info("Received initialized notification from client", "sessionID", session.id)
 		session.mu.Lock()
 		session.metadata["client_initialized"] = true
 		session.mu.Unlock()
