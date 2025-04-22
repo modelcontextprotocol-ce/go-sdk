@@ -105,6 +105,9 @@ type McpClient interface {
 	// SetLoggingLevel sets the minimum level for logs from the server.
 	SetLoggingLevel(level spec.LogLevel) error
 
+	// GetTransport returns the underlying transport used by the client.
+	GetTransport() spec.McpClientTransport
+
 	// Ping sends a ping to the server to check connectivity.
 	Ping() error
 
