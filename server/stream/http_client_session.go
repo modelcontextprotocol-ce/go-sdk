@@ -73,8 +73,8 @@ func (s *httpClientSession) SendRequest(ctx context.Context, method string, para
 	return errors.New("SendRequest not supported in HTTP server transport")
 }
 
-// Respond sends a response to the client for a specific event
-func (s *httpClientSession) Respond(ctx context.Context, event string, message interface{}) (body []byte, err error) {
+// Send sends a response to the client for a specific event
+func (s *httpClientSession) Send(ctx context.Context, event string, message interface{}) (body []byte, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -193,7 +193,7 @@ func (s *httpClientSession) NotifyPromptsListChanged() error {
 		Params:  json.RawMessage("{}"),
 	}
 
-	_, err := s.Respond(context.Background(), "notification", notification)
+	_, err := s.Send(context.Background(), "notification", notification)
 	if err != nil {
 		return fmt.Errorf("failed to marshal prompts list changed notification: %w", err)
 	}
@@ -209,7 +209,7 @@ func (s *httpClientSession) NotifyResourcesListChanged() error {
 		Params:  json.RawMessage("{}"),
 	}
 
-	_, err := s.Respond(context.Background(), "notification", notification)
+	_, err := s.Send(context.Background(), "notification", notification)
 	if err != nil {
 		return fmt.Errorf("failed to marshal resources list changed notification: %w", err)
 	}
@@ -246,7 +246,7 @@ func (s *httpClientSession) NotifyResourceChanged(uri string, data []byte) error
 		Params:  paramsBytes,
 	}
 
-	_, err = s.Respond(context.Background(), "notification", notification)
+	_, err = s.Send(context.Background(), "notification", notification)
 	if err != nil {
 		return fmt.Errorf("failed to marshal resource changed notification: %w", err)
 	}
@@ -262,7 +262,7 @@ func (s *httpClientSession) NotifyToolsListChanged() error {
 		Params:  json.RawMessage("{}"),
 	}
 
-	_, err := s.Respond(context.Background(), "notification", notification)
+	_, err := s.Send(context.Background(), "notification", notification)
 	if err != nil {
 		return fmt.Errorf("failed to marshal tools list changed notification: %w", err)
 	}

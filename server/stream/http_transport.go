@@ -18,6 +18,13 @@ import (
 	"github.com/modelcontextprotocol-ce/go-sdk/util"
 )
 
+const URLSSE = "/sse"
+const URLJSONRPC = "/jsonrpc/"
+const URLStream = "/stream/"
+const HeaderMCPSessionID = "X-MCP-Session-ID"
+const QuerySID = "sid"
+const CookieSID = "MCP-Session-ID"
+
 // HTTPServerTransport implements a server-side transport over HTTP with SSE streaming support
 type HTTPServerTransport struct {
 	// Core HTTP server
@@ -303,13 +310,13 @@ func (t *HTTPServerTransport) StopGracefully(ctx context.Context) error {
 // setupRoutes configures HTTP routes
 func (t *HTTPServerTransport) setupRoutes() {
 	// Main JSON-RPC endpoint for POST requests
-	t.router.HandleFunc("/jsonrpc", t.handleJSONRPC)
+	t.router.HandleFunc(URLJSONRPC, t.handleJSONRPC)
 
 	// SSE streaming endpoint for specific request IDs
-	t.router.HandleFunc("/stream/", t.handleStream)
+	t.router.HandleFunc(URLStream, t.handleStream)
 
 	// Default SSE endpoint with ping for clients to connect to
-	t.router.HandleFunc("/sse", t.handleDefaultSSE)
+	t.router.HandleFunc(URLSSE, t.handleDefaultSSE)
 }
 
 // handleJSONRPC processes incoming JSON-RPC requests
@@ -382,7 +389,7 @@ func (t *HTTPServerTransport) handleJSONRPC(w http.ResponseWriter, r *http.Reque
 		}
 
 		// Marshal the error response
-		responseBytes, err := session.Respond(r.Context(), "message", errorResponse)
+		responseBytes, err := session.Send(r.Context(), "message", errorResponse)
 		if err != nil {
 			t.logger.Error("Failed to send error response through session", "error", err)
 		}
@@ -411,7 +418,7 @@ func (t *HTTPServerTransport) handleJSONRPC(w http.ResponseWriter, r *http.Reque
 		errorBytes, _ := json.Marshal(errorResponse)
 
 		// Send through the session's Respond method
-		if _, respErr := session.Respond(r.Context(), "message", errorResponse); respErr != nil {
+		if _, respErr := session.Send(r.Context(), "message", errorResponse); respErr != nil {
 			t.logger.Error("Failed to send error response through session", "error", respErr)
 		}
 
@@ -423,7 +430,7 @@ func (t *HTTPServerTransport) handleJSONRPC(w http.ResponseWriter, r *http.Reque
 	t.logger.Debug("Sending JSON-RPC response", "method", message.Method, "id", message.ID, "sessionID", sessionID)
 
 	// Send through the session's Respond method
-	if _, respErr := session.Respond(r.Context(), "message", response); respErr != nil {
+	if _, respErr := session.Send(r.Context(), "message", response); respErr != nil {
 		t.logger.Error("Failed to send response through session", "error", respErr)
 	}
 
@@ -435,7 +442,7 @@ func (t *HTTPServerTransport) handleJSONRPC(w http.ResponseWriter, r *http.Reque
 func (t *HTTPServerTransport) handleStream(w http.ResponseWriter, r *http.Request) {
 	// Extract the stream ID from the URL
 	// URL format: /stream/{requestId}
-	requestID := r.URL.Path[len("/stream/"):]
+	requestID := r.URL.Path[len(URLStream):]
 
 	// Validate request ID
 	if requestID == "" {
@@ -566,13 +573,13 @@ func (t *HTTPServerTransport) handleDefaultSSE(w http.ResponseWriter, r *http.Re
 	defer ticker.Stop()
 
 	// Construct endpoint URL with session ID and token (if using authentication)
-	endpoint := fmt.Sprintf("/jsonrpc?sid=%s", sessionID)
+	endpoint := fmt.Sprintf("%s%s", URLJSONRPC, sessionID)
 	if t.requireAuth && t.apiToken != "" {
-		endpoint = fmt.Sprintf("%s&token=%s", endpoint, t.apiToken)
+		endpoint = fmt.Sprintf("%s?token=%s", endpoint, t.apiToken)
 	}
 
 	// Send initial endpoint message - this is what VS Code MCP clients expect
-	if _, err := session.Respond(r.Context(), "endpoint", endpoint); err != nil {
+	if _, err := session.Send(r.Context(), "endpoint", endpoint); err != nil {
 		t.logger.Error("Failed to send initial endpoint message", "sessionID", sessionID, "error", err)
 	}
 
@@ -586,7 +593,7 @@ func (t *HTTPServerTransport) handleDefaultSSE(w http.ResponseWriter, r *http.Re
 
 		case <-ticker.C:
 			// Send an endpoint message with server info
-			if _, err := session.Respond(context.Background(), "endpoint", endpoint); err != nil {
+			if _, err := session.Send(context.Background(), "endpoint", endpoint); err != nil {
 				t.logger.Warn("Failed to send ping message", "sessionID", sessionID, "error", err)
 			} else {
 				t.logger.Debug("Sent ping message", "sessionID", sessionID)
@@ -671,7 +678,7 @@ func (t *HTTPServerTransport) processJSONRPCRequest(ctx context.Context, message
 	// Each response should also be sent through the session's Respond method
 	// to ensure it follows the MCP specification for client communication
 	if response != nil {
-		_, err := session.Respond(ctx, "message", response)
+		_, err := session.Send(ctx, "message", response)
 		if err != nil {
 			return nil, fmt.Errorf("failed to marshal JSON-RPC response: %w", err)
 		}
@@ -1286,17 +1293,25 @@ func (t *HTTPServerTransport) GetSessionStreams(sessionID string) []string {
 
 // getOrCreateSessionID extracts a session ID from the request or creates a new one
 func (t *HTTPServerTransport) getOrCreateSessionID(r *http.Request) string {
+	// Get session id from query path
+	if strings.HasPrefix(r.URL.Path, URLJSONRPC) && len(r.URL.Path) > len(URLJSONRPC) {
+		sid := r.URL.Path[len(URLJSONRPC):]
+		if sid != "" {
+			return sid
+		}
+	}
+
 	// Try to get from header
-	sessionID := r.Header.Get("X-MCP-Session-ID")
+	sessionID := r.Header.Get(HeaderMCPSessionID)
 	if sessionID != "" {
 		t.logger.Debug("Using session ID from header", "sessionID", sessionID)
 		return sessionID
 	}
 
 	// Try to get from query parameter "sid"
-	if sid := r.URL.Query().Get("sid"); sid == "" {
+	if sid := r.URL.Query().Get(QuerySID); sid == "" {
 		// URL-decode the sid parameter
-		decodedSid, err := url.QueryUnescape(sid)
+		decodedSid, err := url.QueryUnescape(QuerySID)
 		if err != nil {
 			t.logger.Warn("Failed to URL-decode sid parameter", "sid", sid, "error", err)
 		} else if decodedSid != "" {
@@ -1308,7 +1323,7 @@ func (t *HTTPServerTransport) getOrCreateSessionID(r *http.Request) string {
 	}
 
 	// Try to get from cookie
-	cookie, err := r.Cookie("MCP-Session-ID")
+	cookie, err := r.Cookie(CookieSID)
 	if err == nil && cookie.Value != "" {
 		t.logger.Debug("Using session ID from cookie", "sessionID", cookie.Value)
 		return cookie.Value
