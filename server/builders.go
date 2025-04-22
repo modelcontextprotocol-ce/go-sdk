@@ -206,8 +206,8 @@ func (b *syncServerBuilder) WithToolHandler(name string, handler ToolHandler) Sy
 func (b *syncServerBuilder) WithStreamingToolHandler(name string, handler StreamingToolHandler) SyncBuilder {
 	util.AssertNotNil(name, "Tool name must not be nil")
 	util.AssertNotNil(handler, "Streaming tool handler must not be nil")
-	if b.toolHandlers == nil {
-		b.toolHandlers = make(map[string]ToolHandler)
+	if b.streamingToolHandlers == nil {
+		b.streamingToolHandlers = make(map[string]StreamingToolHandler)
 	}
 	b.streamingToolHandlers[name] = handler
 	return b
