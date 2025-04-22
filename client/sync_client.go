@@ -1021,3 +1021,8 @@ func (c *syncClientImpl) DeleteRoot(uri string) error {
 func (c *syncClientImpl) OnRootsChanged(callback func([]spec.Root)) {
 	c.features.AddRootsChangeHandler(callback)
 }
+
+// GetTransport returns the underlying transport used by the client.
+func (c *syncClientImpl) GetTransport() spec.McpClientTransport {
+	return c.transport
+}

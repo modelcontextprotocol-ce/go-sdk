@@ -2108,3 +2108,8 @@ func (c *asyncClientImpl) SendCancellationAsync(ctx context.Context, operationID
 
 	return errCh
 }
+
+// GetTransport returns the underlying transport used by the client.
+func (c *asyncClientImpl) GetTransport() spec.McpClientTransport {
+	return c.transport
+}
