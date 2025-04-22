@@ -31,8 +31,14 @@ import (
 )
 
 func main() {
-    // Create a transport implementation
-    transport := YourTransportImplementation()
+    // Parse command line arguments for port configuration
+    port := flag.Int("port", 8080, "Port to run the MCP server on")
+    flag.Parse()
+
+    addr := fmt.Sprintf(":%d", *port)
+
+    // Using builtin HTTP/SSE transport
+    provider := stream.NewHTTPServerTransportProvider(addr)
     
     // Create a client using the builder pattern
     c := client.NewSync(transport).
