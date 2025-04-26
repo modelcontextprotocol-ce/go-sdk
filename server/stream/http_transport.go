@@ -9,7 +9,6 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -1309,16 +1308,7 @@ func (t *HTTPServerTransport) getOrCreateSessionID(r *http.Request) string {
 	}
 
 	// Try to get from query parameter "sid"
-	if sid := r.URL.Query().Get(QuerySID); sid == "" {
-		// URL-decode the sid parameter
-		decodedSid, err := url.QueryUnescape(QuerySID)
-		if err != nil {
-			t.logger.Warn("Failed to URL-decode sid parameter", "sid", sid, "error", err)
-		} else if decodedSid != "" {
-			t.logger.Debug("Using session ID from query parameter", "sessionID", decodedSid)
-			return decodedSid
-		}
-	} else {
+	if sid := r.URL.Query().Get(QuerySID); sid != "" {
 		return sid
 	}
 
