@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/modelcontextprotocol-ce/go-sdk/auth"
 	"github.com/modelcontextprotocol-ce/go-sdk/server/stream"
 	"github.com/modelcontextprotocol-ce/go-sdk/spec"
 	"github.com/modelcontextprotocol-ce/go-sdk/util"
@@ -34,6 +35,9 @@ type Builder interface {
 
 	// WithAPITokenFromConfig loads the API token from the config file
 	WithAPITokenFromConfig() Builder
+
+	// WithAuthenticator sets a custom authenticator for pluggable authentication
+	WithAuthenticator(authenticator auth.Authenticator) Builder
 }
 
 // SyncBuilder extends Builder with synchronous server specific methods
@@ -90,6 +94,7 @@ type syncServerBuilder struct {
 	resourceHandler       ResourceHandler
 	promptHandler         PromptHandler
 	apiToken              string
+	authenticator         auth.Authenticator // Added authenticator field
 }
 
 // asyncServerBuilder implements the AsyncBuilder interface for building asynchronous MCP servers
@@ -102,6 +107,7 @@ type asyncServerBuilder struct {
 	resourceHandler      AsyncResourceHandler
 	promptHandler        AsyncPromptHandler
 	apiToken             string
+	authenticator        auth.Authenticator // Added authenticator field
 }
 
 // newSyncServerBuilder creates a new syncServerBuilder with default settings
@@ -172,22 +178,30 @@ func (b *syncServerBuilder) WithPrompts(prompts ...spec.Prompt) Builder {
 
 // WithAPIToken sets an API token for authentication
 func (b *syncServerBuilder) WithAPIToken(token string) Builder {
-	b.apiToken = token
+	authenticator := auth.NewTokenAuthenticator(token)
+	b.authenticator = authenticator
+	b.apiToken = authenticator.GetToken()
 	return b
 }
 
 // WithAPITokenFromConfig loads the API token from the config file
 func (b *syncServerBuilder) WithAPITokenFromConfig() Builder {
-	config, err := util.LoadConfig("")
+	authenticator, err := auth.FromConfig("")
 	if err != nil {
 		// Log error but continue without token
 		fmt.Printf("Error loading API token from config: %v\n", err)
 		return b
 	}
 
-	if config.APIToken != "" {
-		b.apiToken = config.APIToken
-	}
+	b.authenticator = authenticator
+	b.apiToken = authenticator.GetToken()
+	return b
+}
+
+// WithAuthenticator sets a custom authenticator for pluggable authentication
+func (b *syncServerBuilder) WithAuthenticator(authenticator auth.Authenticator) Builder {
+	util.AssertNotNil(authenticator, "Authenticator must not be nil")
+	b.authenticator = authenticator
 	return b
 }
 
@@ -236,10 +250,15 @@ func (b *syncServerBuilder) WithCreateMessageHandler(handler CreateMessageHandle
 
 // Build creates a new McpSyncServer with the configured settings
 func (b *syncServerBuilder) Build() McpSyncServer {
-	// If using HTTP server transport, pass the API token
-	if httpProvider, ok := b.transportProvider.(*stream.HTTPServerTransportProvider); ok && b.apiToken != "" {
-		// Add API token option to the transport provider
-		httpProvider.WithAPIToken(b.apiToken)
+	// If using HTTP server transport, configure authentication
+	if httpProvider, ok := b.transportProvider.(*stream.HTTPServerTransportProvider); ok {
+		if b.authenticator != nil {
+			// Use the custom authenticator if provided
+			httpProvider.WithAuthenticator(b.authenticator)
+		} else if b.apiToken != "" {
+			// Fall back to API token for backward compatibility
+			httpProvider.WithAPIToken(b.apiToken)
+		}
 	}
 
 	return &syncServerImpl{
@@ -297,22 +316,30 @@ func (b *asyncServerBuilder) WithPrompts(prompts ...spec.Prompt) Builder {
 
 // WithAPIToken sets an API token for authentication
 func (b *asyncServerBuilder) WithAPIToken(token string) Builder {
-	b.apiToken = token
+	authenticator := auth.NewTokenAuthenticator(token)
+	b.authenticator = authenticator
+	b.apiToken = authenticator.GetToken()
 	return b
 }
 
 // WithAPITokenFromConfig loads the API token from the config file
 func (b *asyncServerBuilder) WithAPITokenFromConfig() Builder {
-	config, err := util.LoadConfig("")
+	authenticator, err := auth.FromConfig("")
 	if err != nil {
 		// Log error but continue without token
 		fmt.Printf("Error loading API token from config: %v\n", err)
 		return b
 	}
 
-	if config.APIToken != "" {
-		b.apiToken = config.APIToken
-	}
+	b.authenticator = authenticator
+	b.apiToken = authenticator.GetToken()
+	return b
+}
+
+// WithAuthenticator sets a custom authenticator for pluggable authentication
+func (b *asyncServerBuilder) WithAuthenticator(authenticator auth.Authenticator) Builder {
+	util.AssertNotNil(authenticator, "Authenticator must not be nil")
+	b.authenticator = authenticator
 	return b
 }
 
@@ -350,10 +377,15 @@ func (b *asyncServerBuilder) WithCreateMessageHandler(handler AsyncCreateMessage
 
 // Build creates a new McpAsyncServer with the configured settings
 func (b *asyncServerBuilder) Build() McpAsyncServer {
-	// If using HTTP server transport, pass the API token
-	if httpProvider, ok := b.transportProvider.(*stream.HTTPServerTransportProvider); ok && b.apiToken != "" {
-		// Add API token option to the transport provider
-		httpProvider.WithAPIToken(b.apiToken)
+	// If using HTTP server transport, configure authentication
+	if httpProvider, ok := b.transportProvider.(*stream.HTTPServerTransportProvider); ok {
+		if b.authenticator != nil {
+			// Use the custom authenticator if provided
+			httpProvider.WithAuthenticator(b.authenticator)
+		} else if b.apiToken != "" {
+			// Fall back to API token for backward compatibility
+			httpProvider.WithAPIToken(b.apiToken)
+		}
 	}
 
 	return &asyncServerImpl{

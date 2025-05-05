@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/modelcontextprotocol-ce/go-sdk/auth"
 	"github.com/modelcontextprotocol-ce/go-sdk/spec"
 	"github.com/modelcontextprotocol-ce/go-sdk/util"
 )
@@ -50,8 +51,9 @@ type HTTPServerTransport struct {
 	createMessageHandler        func(ctx context.Context, session spec.McpClientSession, request *spec.CreateMessageRequest) (*spec.CreateMessageResponse, error)
 
 	// Security
-	apiToken    string
-	requireAuth bool
+	authenticator auth.Authenticator // New authenticator field
+	apiToken      string             // Kept for backward compatibility
+	requireAuth   bool
 
 	// Logger
 	logger util.Logger
@@ -135,12 +137,20 @@ func WithAPIToken(token string) HTTPServerOption {
 	}
 }
 
+// WithAuthenticator sets a custom authenticator for the server
+func WithAuthenticator(authenticator auth.Authenticator) HTTPServerOption {
+	return func(t *HTTPServerTransport) {
+		t.authenticator = authenticator
+		t.logger.Info("Custom authenticator set for HTTP server transport")
+	}
+}
+
 // WithAuthRequired sets whether authentication is required
 func WithAuthRequired(required bool) HTTPServerOption {
 	return func(t *HTTPServerTransport) {
 		t.requireAuth = required
-		if required && t.apiToken == "" {
-			t.logger.Warn("Authentication required but no API token set")
+		if required && t.apiToken == "" && t.authenticator == nil {
+			t.logger.Warn("Authentication required but no API token or authenticator set")
 		}
 	}
 }
@@ -150,6 +160,11 @@ func (t *HTTPServerTransport) validateAPIToken(r *http.Request) bool {
 	// If auth is not required, always pass
 	if !t.requireAuth {
 		return true
+	}
+
+	if t.authenticator != nil {
+		// Use the pluggable authenticator
+		return t.authenticator.Authenticate(r)
 	}
 
 	if t.apiToken == "" {
@@ -1457,6 +1472,13 @@ func WithProviderLogger(logger util.Logger) func(*HTTPServerTransportProvider) {
 func (p *HTTPServerTransportProvider) WithAPIToken(token string) *HTTPServerTransportProvider {
 	p.logger.Info("Setting API token for HTTP server transport")
 	p.options = append(p.options, WithAPIToken(token))
+	return p
+}
+
+// WithAuthenticator sets a custom authenticator for the server transport provider
+func (p *HTTPServerTransportProvider) WithAuthenticator(authenticator auth.Authenticator) *HTTPServerTransportProvider {
+	p.logger.Info(fmt.Sprintf("Setting custom authenticator for HTTP server transport: %T", authenticator))
+	p.options = append(p.options, WithAuthenticator(authenticator))
 	return p
 }
 
