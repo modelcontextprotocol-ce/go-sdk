@@ -129,6 +129,7 @@ type DefaultOIDCVerifier struct {
 	keyCache    sync.Map
 	keyCacheTTL time.Duration
 	lastRefresh time.Time
+	refreshMu   sync.RWMutex // Mutex to protect lastRefresh field
 }
 
 // NewDefaultOIDCVerifier creates a verifier that uses the OIDC provider's JWKS endpoint
@@ -254,7 +255,11 @@ func (v *DefaultOIDCVerifier) getPublicKeyFromJWKS(ctx context.Context, kid stri
 	}
 
 	// Check if we need to refresh the JWKS
-	if time.Since(v.lastRefresh) > v.keyCacheTTL {
+	v.refreshMu.RLock()
+	shouldRefresh := time.Since(v.lastRefresh) > v.keyCacheTTL
+	v.refreshMu.RUnlock()
+
+	if shouldRefresh {
 		if err := v.refreshJWKS(ctx); err != nil {
 			return nil, err
 		}
@@ -367,6 +372,8 @@ func (v *DefaultOIDCVerifier) refreshJWKS(ctx context.Context) error {
 		}
 	}
 
+	v.refreshMu.Lock()
 	v.lastRefresh = time.Now()
+	v.refreshMu.Unlock()
 	return nil
 }

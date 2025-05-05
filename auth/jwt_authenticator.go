@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/golang-jwt/jwt/v4"
@@ -19,7 +20,7 @@ type JWTAuthenticator struct {
 	allowedAlgs  []string
 	claimsParser func(claims jwt.MapClaims) (bool, error)
 	expiryWindow time.Duration
-	tokenCache   map[string]time.Time // Simple token cache for performance
+	tokenCache   sync.Map // Thread-safe map for caching tokens
 }
 
 // JWTAuthOption defines options for configuring the JWT authenticator
@@ -31,7 +32,6 @@ func NewJWTAuthenticator(secretKey interface{}, opts ...JWTAuthOption) *JWTAuthe
 		secretKey:    secretKey,
 		allowedAlgs:  []string{"HS256", "HS384", "HS512"},
 		expiryWindow: 0, // No leeway by default
-		tokenCache:   make(map[string]time.Time),
 	}
 
 	// Apply options
@@ -101,12 +101,12 @@ func (a *JWTAuthenticator) Authenticate(r *http.Request) bool {
 	}
 
 	// Check cache first for performance
-	if expiry, found := a.tokenCache[tokenStr]; found {
-		if time.Now().Before(expiry) {
+	if expiry, found := a.tokenCache.Load(tokenStr); found {
+		if expTime, ok := expiry.(time.Time); ok && time.Now().Before(expTime) {
 			return true
 		}
 		// Token expired, remove from cache
-		delete(a.tokenCache, tokenStr)
+		a.tokenCache.Delete(tokenStr)
 	}
 
 	// Parse the token
@@ -185,10 +185,10 @@ func (a *JWTAuthenticator) Authenticate(r *http.Request) bool {
 	// Add to cache with expiry
 	if exp, ok := claims["exp"].(float64); ok {
 		expTime := time.Unix(int64(exp), 0)
-		a.tokenCache[tokenStr] = expTime
+		a.tokenCache.Store(tokenStr, expTime)
 	} else {
 		// If no expiry, cache for a short time
-		a.tokenCache[tokenStr] = time.Now().Add(5 * time.Minute)
+		a.tokenCache.Store(tokenStr, time.Now().Add(5*time.Minute))
 	}
 
 	return true
